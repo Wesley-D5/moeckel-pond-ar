@@ -1,47 +1,65 @@
 # Moeckel Pond Seasons: web AR
 
+Live at **https://wesley-d5.github.io/moeckel-pond-ar/**
+
 A static website. People open it on their phone and either:
 
-- **Scan the poster**: point the camera at the printed poster (the video's first frame). The video plays right on top of it, locked to the paper.
-- **Hang it on a wall**: put the video on any wall around them.
+- **Scan the poster**: point the camera at the printed poster (the video's first frame). The video plays on top of it, locked to the paper.
+- **Hang it on a wall**: tap any wall and the video stays fixed there in 3D, even as you walk around.
 
-## Which phones get what
+Built on the **8th Wall engine** (Niantic Spatial), self-hosted from this folder, with three.js.
+
+## Devices
 
 | Device | Scan the poster | Hang it on a wall |
 |---|---|---|
-| iPhone / iPad (Safari, Chrome) | ✅ | Gyro mode: stays put while you look around, drifts if you walk |
-| Android (Chrome, ARCore phones) | ✅ | ✅ Real wall anchoring (WebXR) |
-| Laptop | ✅ with webcam | Shows a QR code to open on a phone |
+| iPhone / iPad (Safari, iOS 16.4+) | ✅ | ✅ world tracking |
+| Android (Chrome, Samsung Internet, Firefox, Edge) | ✅ | ✅ world tracking |
+| Laptop / desktop | ✅ with a webcam | Shows a QR code to open it on a phone |
 
-Browsers can't use the iPhone's LiDAR. Apple only gives LiDAR to native apps and AR Quick Look,
-and AR Quick Look can't play video. If a future Safari adds WebXR AR, this page will use it
-automatically.
+Browsers can't use the iPhone's LiDAR (Apple doesn't expose it to the web), so 8th Wall tracks
+the world from the camera image and motion sensors instead. On a plain, featureless white wall
+it can't measure the wall's angle, so the video faces you at about 1.5 m. Textured walls (brick,
+wood, posters, frames) give the best fit.
 
-## Hosting for free, forever (GitHub Pages)
+## Hosting
 
-Everything (three.js, MindAR, the video) is stored in this folder. Nothing loads from outside
-services, so nothing can break when another company shuts something down.
+Free on GitHub Pages: no server, HTTPS included (the camera needs it), and nothing to renew.
+Every library and media file is in this folder, and the engine makes no calls to outside services
+for the features used here.
 
-1. Create a free account at github.com, then click **New repository**. Name it e.g. `moeckel-pond-ar` and set it to **Public**.
-2. Click **uploading an existing file** and drag in *everything inside this folder*, keeping the folders as they are. Click **Commit**.
-3. Go to **Settings → Pages**, then under *Branch* choose `main` / `(root)` and **Save**.
-4. After about a minute the site is live at `https://YOUR-NAME.github.io/moeckel-pond-ar/`.
-5. Print a QR code of that URL on or next to the poster (the page shows one when opened on a computer).
+## Files
 
-Cost: $0. No servers to manage, HTTPS included (the camera needs it). Optional: a custom
-domain costs about $10–15 a year, but it's one more thing that can expire. The free
-`github.io` address never expires.
+- `index.html`, `app.js`, `style.css`: the site
+- `assets/poster.jpg`: the poster (first frame of the video). Print this.
+- `assets/poster-540.mp4`: the video (keep it under 25 MB for GitHub's web uploader)
+- `image-targets/poster.json` + `poster_luminance.jpg`: the tracking data for the poster
+- `vendor/8thwall/`: the 8th Wall engine binary (do not modify, per its license)
+- `vendor/xrextras/`: 8th Wall's loading and permission screens (MIT)
+- `vendor/three/`: three.js r183 (MIT)
 
 ## Changing the poster or video
 
-- New video: replace `assets/poster-540.mp4` (keep it under 25 MB, 16:9).
-- New poster image: replace `assets/target.jpg` and `assets/poster.jpg`, then open
-  `tools/compile-target.html` on the live site, click **Use assets/target.jpg**, and upload the
-  `target.mind` file it downloads into `assets/`.
+- New video: replace `assets/poster-540.mp4`, keeping 16:9.
+- New poster image: replace `assets/poster.jpg`, then regenerate the tracking data with 8th Wall's tool:
 
-## Tips for the printed poster
+  ```
+  npx @8thwall/image-target-cli@latest
+  ```
 
-- Print the exact first frame (`assets/poster.jpg`), matte paper if you can; glare hurts tracking.
-- Bigger is easier to detect. A4/Letter and up works well.
+  Answer: the path to `assets/poster.jpg`, `flat`, `Y` (default crop), output folder `image-targets`,
+  name `poster`. Commit the new `image-targets/poster.json` and `poster_luminance.jpg`.
 
-Built with MindAR 1.2.5 (MIT) and three.js r160 (MIT).
+## Printing tips
+
+- Print `assets/poster.jpg` exactly, on matte paper if possible; glare hurts tracking.
+- The engine tracks the centre 4:3 area of the poster, so don't cover the middle with text or logos.
+- A4/Letter or bigger works best.
+
+## License notes
+
+This product includes the XR Engine software developed by Niantic Spatial, Inc.
+Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
+License: https://github.com/8thwall/engine/blob/main/LICENSE. The engine is provided "as is",
+without warranty; see the license. Free for this use: it may not be used in a paid product whose
+value comes mainly from the engine.

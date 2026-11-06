@@ -1,8 +1,10 @@
 <!DOCTYPE html>
+<!-- This product includes the XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. License: https://github.com/8thwall/engine/blob/main/LICENSE -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Moeckel Pond Seasons · AR</title>
 <meta name="description" content="Point your phone at the Moeckel Pond poster to watch it come to life, or hang it on any wall.">
 <meta property="og:title" content="Moeckel Pond Seasons · AR">
@@ -10,14 +12,13 @@
 <meta name="theme-color" content="#0f1a14">
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
+
+<!-- 8th Wall engine (self-hosted; loads the tracking chunk up front) + its helper UI -->
+<script src="./vendor/8thwall/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
+<script src="./vendor/xrextras/xrextras.js" crossorigin="anonymous"></script>
+
 <script type="importmap">
-{
-  "imports": {
-    "three": "./vendor/three/three.module.js",
-    "three/addons/": "./vendor/three/addons/",
-    "mindar-image-three": "./vendor/mindar/mindar-image-three.prod.js"
-  }
-}
+{ "imports": { "three": "./vendor/three/three.module.js" } }
 </script>
 </head>
 <body>
@@ -35,7 +36,7 @@
     </button>
     <button id="btnWall">
       <strong>Hang it on a wall</strong>
-      <span id="wallHint">Place the video on any wall around you</span>
+      <span>Tap any wall around you and it stays there</span>
     </button>
 
     <div id="desktop" hidden>
@@ -44,22 +45,20 @@
       <p class="url" id="url"></p>
     </div>
     <p id="error" class="error" hidden></p>
+    <p class="credit">AR by the <a href="https://8thwall.org">8th Wall</a> engine ·
+      © 2026 Niantic Spatial, Inc. · <a href="https://github.com/8thwall/engine/blob/main/LICENSE">License</a></p>
   </div>
 </main>
 
-<!-- Camera views -->
-<div id="stage" hidden>
-  <video id="camfeed" playsinline muted autoplay></video>
-  <div id="mindar"></div>
-</div>
+<!-- Camera view: the 8th Wall canvas is added here -->
+<div id="stage" hidden></div>
 
-<!-- Controls shown on top of any AR mode (also the WebXR DOM overlay root) -->
+<!-- Controls on top of the camera view -->
 <div id="overlay" hidden>
   <div id="hint" class="hint"></div>
   <div class="bar" id="bar">
     <button id="btnExit" aria-label="Exit">✕</button>
     <button id="btnSmaller" class="placeonly" aria-label="Smaller">−</button>
-    <button id="btnPlace" class="gyroonly">Place here</button>
     <button id="btnBigger" class="placeonly" aria-label="Bigger">+</button>
     <button id="btnSound" aria-label="Sound">🔊</button>
   </div>

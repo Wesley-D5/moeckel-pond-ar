@@ -1,25 +1,24 @@
-// Moeckel Pond Seasons — web AR
+// Moeckel Pond Seasons: web AR on the self-hosted 8th Wall engine.
 //
-// Three ways in, picked automatically:
-//   1. Scan the poster  -> MindAR image tracking (iPhone + Android + laptop webcam)
-//   2. Hang it on a wall:
-//      a. WebXR hit-test  -> real wall anchoring (Android Chrome with ARCore, and any
-//                            future browser that adds WebXR AR)
-//      b. Camera + gyro   -> fallback everywhere else (iPhone Safari today): the video
-//                            stays fixed in the direction you placed it while you look around.
+//   Scan the poster   -> 8th Wall image tracking: the video is locked onto the printed poster.
+//   Hang it on a wall -> 8th Wall world tracking (SLAM): tap a wall and the video stays fixed
+//                        there in 3D, even as you walk around. Works in iPhone Safari and Android.
 //
-// Everything (libraries, video, target) is served from this folder, so the site has no
-// outside services that can disappear.
+// The engine, three.js and all media are served from this folder, so the site depends on no
+// outside service.
 
 import * as THREE from 'three';
 import { qrcode } from './vendor/qrcode.mjs';
 
+window.THREE = THREE; // the 8th Wall three.js module looks for a global THREE
+
 const VIDEO_SRC = './assets/poster-540.mp4';
 const POSTER_SRC = './assets/poster.jpg';
-const TARGET_SRC = './assets/target.mind';
-const ASPECT = 1080 / 1920;        // height / width of the video
-const START_WIDTH_M = 1.0;         // default size on a wall, in metres
-const GYRO_DISTANCE_M = 2.0;       // how far away the gyro-mode poster sits
+const TARGET_JSON = './image-targets/poster.json';
+const ASPECT = 1080 / 1920;   // poster/video height ÷ width
+const CAMERA_HEIGHT = 1.5;    // phone height above the floor at start; makes 1 unit ≈ 1 metre
+const START_WIDTH = 1.0;      // poster width on a wall (≈ metres)
+const FALLBACK_DISTANCE = 1.5; // used if the wall has too little texture to measure
 
 const $ = (id) => document.getElementById(id);
 const home = $('home'), stage = $('stage'), overlay = $('overlay'), hint = $('hint');
@@ -39,26 +38,26 @@ const imageTex = new THREE.TextureLoader().load(POSTER_SRC);
 imageTex.colorSpace = THREE.SRGBColorSpace;
 const videoTex = new THREE.VideoTexture(video);
 videoTex.colorSpace = THREE.SRGBColorSpace;
-// Show the still poster until the video actually has frames, so there is never a black flash.
+// Show the still poster until the video has frames, so there's never a black flash.
 const material = new THREE.MeshBasicMaterial({ map: imageTex, toneMapped: false });
 video.addEventListener('playing', () => { material.map = videoTex; material.needsUpdate = true; });
 
-// Must run synchronously inside a tap so browsers allow sound later.
+// Runs inside the tap so the browser allows sound later.
 function unlockVideo() {
   video.muted = false;
   const p = video.play();
-  if (p) p.then(() => video.pause()).catch(() => { video.muted = true; });
+  if (p) p.then(() => video.pause()).catch(() => { video.muted = true; updateSoundButton(); });
   updateSoundButton();
 }
 
+// A poster 1 unit wide, facing +Z, optionally with a dark frame behind it.
 function makePoster({ frame }) {
   const group = new THREE.Group();
-  const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, ASPECT), material);
-  group.add(plane);
+  group.add(new THREE.Mesh(new THREE.PlaneGeometry(1, ASPECT), material));
   if (frame) {
-    const border = 0.035;
+    const b = 0.03;
     const back = new THREE.Mesh(
-      new THREE.PlaneGeometry(1 + border * 2, ASPECT + border * 2),
+      new THREE.PlaneGeometry(1 + b * 2, ASPECT + b * 2),
       new THREE.MeshBasicMaterial({ color: 0x15130f })
     );
     back.position.z = -0.004;
@@ -69,16 +68,12 @@ function makePoster({ frame }) {
 
 // ---------- overlay controls ----------
 
-let exitHandler = () => location.reload();
 let sizeHandler = () => {};
-let placeHandler = () => {};
-
 function updateSoundButton() { $('btnSound').textContent = video.muted ? '🔇' : '🔊'; }
 $('btnSound').onclick = () => { video.muted = !video.muted; updateSoundButton(); };
-$('btnExit').onclick = () => exitHandler();
+$('btnExit').onclick = () => { try { XR8.stop(); } catch (_) {} location.reload(); };
 $('btnBigger').onclick = () => sizeHandler(1.2);
 $('btnSmaller').onclick = () => sizeHandler(1 / 1.2);
-$('btnPlace').onclick = () => placeHandler();
 
 function enterMode(mode) {
   home.hidden = true;
@@ -94,248 +89,226 @@ function showError(err) {
   overlay.hidden = true;
   home.hidden = false;
   const msg = (err && (err.message || err.name)) || String(err);
-  let friendly = msg;
-  if (/NotAllowed|denied|Permission/i.test(msg)) friendly = 'Camera or motion access was blocked. Allow it in your browser settings and try again.';
-  if (/NotFound|no camera|Requested device not found/i.test(msg)) friendly = 'No camera was found on this device.';
-  $('error').textContent = friendly;
+  $('error').textContent = /NotAllowed|denied|Permission/i.test(msg)
+    ? 'Camera or motion access was blocked. Allow it in your browser settings and try again.'
+    : msg;
   $('error').hidden = false;
 }
 
-// ---------- 1. Scan the poster (MindAR) ----------
+// ---------- 8th Wall startup ----------
+
+const xrReady = new Promise((resolve) => {
+  if (window.XR8) resolve();
+  else window.addEventListener('xrloaded', resolve, { once: true });
+});
+
+async function runXR({ worldTracking, imageTargetData = [], allowDesktop, onStart, listeners = [] }) {
+  await xrReady;
+  if (!XR8.XrController) await XR8.loadChunk('slam');
+
+  XR8.XrController.configure({
+    disableWorldTracking: !worldTracking,
+    imageTargetData,
+    scale: 'responsive',
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.id = 'camerafeed';
+  stage.appendChild(canvas);
+
+  XR8.addCameraPipelineModules([
+    XR8.GlTextureRenderer.pipelineModule(),   // draws the camera feed
+    XR8.Threejs.pipelineModule(),             // three.js scene synced to the camera
+    XR8.XrController.pipelineModule(),        // image + world tracking
+    XRExtras.FullWindowCanvas.pipelineModule(),
+    XRExtras.Loading.pipelineModule(),        // loading screen + permission prompts
+    XRExtras.RuntimeError.pipelineModule(),
+    {
+      name: 'moeckel',
+      onStart: () => {
+        const { scene, camera, renderer } = XR8.Threejs.xrScene();
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        camera.position.set(0, CAMERA_HEIGHT, 0);
+        XR8.XrController.updateCameraProjectionMatrix({ origin: camera.position, facing: camera.quaternion });
+        canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+        onStart({ scene, camera, canvas });
+      },
+      listeners,
+    },
+  ]);
+
+  const device = XR8.XrConfig.device();
+  XR8.run({ canvas, allowedDevices: allowDesktop ? device.ANY : device.MOBILE_AND_HEADSETS });
+}
+
+// ---------- 1. Scan the poster ----------
 
 async function startScan() {
   enterMode('scan');
   hint.textContent = 'Point your camera at the poster';
-  const { MindARThree } = await import('mindar-image-three');
-  const mindar = new MindARThree({
-    container: $('mindar'),
-    imageTargetSrc: TARGET_SRC,
-    uiLoading: 'yes', uiScanning: 'yes', uiError: 'yes',
-    filterMinCF: 0.0001, filterBeta: 0.001,   // smoother, less jittery overlay
+  const target = await fetch(TARGET_JSON).then((r) => r.json());
+
+  // The engine tracks the centre 4:3 area of the poster (full height). It reports that area as
+  // scaledWidth × scaledHeight; the full 16:9 poster is the same height, just wider.
+  const anchor = new THREE.Group();
+  anchor.visible = false;
+  const poster = makePoster({ frame: false });
+  anchor.add(poster);
+
+  const show = ({ detail }) => {
+    if (detail.name !== target.name) return;
+    anchor.position.copy(detail.position);
+    anchor.quaternion.copy(detail.rotation);
+    anchor.scale.setScalar(detail.scale);
+    poster.scale.setScalar(detail.scaledHeight / ASPECT);
+    if (!anchor.visible) {
+      anchor.visible = true;
+      hint.textContent = '';
+      video.play();
+    }
+  };
+  const hide = ({ detail }) => {
+    if (detail.name !== target.name) return;
+    anchor.visible = false;
+    video.pause();
+    hint.textContent = 'Point your camera at the poster';
+  };
+
+  await runXR({
+    worldTracking: false,           // pure image tracking: fastest, no motion prompt
+    imageTargetData: [target],
+    allowDesktop: true,
+    onStart: ({ scene }) => scene.add(anchor),
+    listeners: [
+      { event: 'reality.imagefound', process: show },
+      { event: 'reality.imageupdated', process: show },
+      { event: 'reality.imagelost', process: hide },
+    ],
   });
-  const { renderer, scene, camera } = mindar;
-  const anchor = mindar.addAnchor(0);
-  anchor.group.add(makePoster({ frame: false }));   // target width = 1 unit, matches poster exactly
-  anchor.onTargetFound = () => { hint.textContent = ''; video.play(); };
-  anchor.onTargetLost = () => { hint.textContent = 'Point your camera at the poster'; video.pause(); };
-  await mindar.start();
-  renderer.setAnimationLoop(() => renderer.render(scene, camera));
-  exitHandler = () => { mindar.stop(); location.reload(); };
 }
 
-// ---------- 2a. Hang it on a wall with WebXR ----------
+// ---------- 2. Hang it on a wall ----------
 
-async function startWebXR() {
-  enterMode('xr');
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.xr.enabled = true;
-  renderer.domElement.className = 'ar';
-  document.body.appendChild(renderer.domElement);
+// Fit a vertical plane through feature points (top-down line fit). Returns the wall's
+// horizontal normal, or null if the points don't look like a wall.
+function fitWallNormal(points) {
+  if (points.length < 5) return null;
+  let mx = 0, mz = 0;
+  for (const p of points) { mx += p.x; mz += p.z; }
+  mx /= points.length; mz /= points.length;
+  let cxx = 0, czz = 0, cxz = 0;
+  for (const p of points) {
+    const dx = p.x - mx, dz = p.z - mz;
+    cxx += dx * dx; czz += dz * dz; cxz += dx * dz;
+  }
+  cxx /= points.length; czz /= points.length; cxz /= points.length;
+  const mid = (cxx + czz) / 2;
+  const r = Math.sqrt(((cxx - czz) / 2) ** 2 + cxz ** 2);
+  const big = mid + r, small = Math.max(mid - r, 0);
+  if (Math.sqrt(big) < 0.04 || small / big > 0.2) return null; // too clustered or not flat
+  const theta = 0.5 * Math.atan2(2 * cxz, cxx - czz);
+  return new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
+}
 
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
-
-  const reticle = new THREE.Mesh(
-    new THREE.RingGeometry(0.07, 0.09, 40).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 })
-  );
-  reticle.matrixAutoUpdate = false;
-  reticle.visible = false;
-  scene.add(reticle);
+async function startWall() {
+  // On iPhone, motion access must be requested inside the tap, before anything async.
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    DeviceMotionEvent.requestPermission().catch(() => {});
+  }
+  enterMode('wall');
+  hint.textContent = 'Move your phone a little, then tap a wall';
 
   const poster = makePoster({ frame: true });
   poster.visible = false;
-  poster.scale.setScalar(START_WIDTH_M);
-  scene.add(poster);
-
-  // Taps on our buttons must not also place the poster.
-  $('bar').addEventListener('beforexrselect', (e) => e.preventDefault());
-
-  const session = await navigator.xr.requestSession('immersive-ar', {
-    requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay'],
-    domOverlay: { root: overlay },
-  });
-  renderer.xr.setReferenceSpaceType('local');
-  await renderer.xr.setSession(session);
-  const refSpace = renderer.xr.getReferenceSpace();
-  const viewerSpace = await session.requestReferenceSpace('viewer');
-  const hitSource = await session.requestHitTestSource({ space: viewerSpace });
-
-  hint.textContent = 'Slowly scan a wall until the ring appears';
-  let lastHit = null;
+  poster.scale.setScalar(START_WIDTH);
   let onFloor = false;
-  const viewerPos = new THREE.Vector3();
-  const m = new THREE.Matrix4();
-
-  session.addEventListener('select', () => {
-    if (!lastHit) return;
-    m.fromArray(lastHit);
-    const pos = new THREE.Vector3().setFromMatrixPosition(m);
-    const normal = new THREE.Vector3().setFromMatrixColumn(m, 1).normalize();
-    const isWall = Math.abs(normal.y) < 0.6;
-    onFloor = !isWall;
-    if (isWall) {
-      // Make sure the normal points towards the viewer, then hang upright on the wall.
-      const toViewer = viewerPos.clone().sub(pos);
-      if (normal.dot(toViewer) < 0) normal.negate();
-      normal.y = 0; normal.normalize();
-      poster.position.copy(pos).addScaledVector(normal, 0.01);
-      poster.lookAt(pos.clone().add(normal));
-    } else {
-      // Floor or table: stand it upright on the spot, facing you.
-      poster.position.copy(pos);
-      poster.position.y += (ASPECT * poster.scale.x) / 2;
-      poster.lookAt(viewerPos.x, poster.position.y, viewerPos.z);
-    }
-    poster.visible = true;
-    video.play();
-    hint.textContent = 'Tap anywhere to move it';
-  });
 
   sizeHandler = (k) => {
     const s = THREE.MathUtils.clamp(poster.scale.x * k, 0.2, 6);
-    if (onFloor) poster.position.y += (ASPECT * (s - poster.scale.x)) / 2; // keep it standing on the floor
+    if (onFloor) poster.position.y += (ASPECT * (s - poster.scale.x)) / 2;
     poster.scale.setScalar(s);
   };
 
-  renderer.setAnimationLoop((t, frame) => {
-    if (frame) {
-      const vp = frame.getViewerPose(refSpace);
-      if (vp) viewerPos.set(vp.transform.position.x, vp.transform.position.y, vp.transform.position.z);
-      const hits = frame.getHitTestResults(hitSource);
-      if (hits.length) {
-        const pose = hits[0].getPose(refSpace);
-        lastHit = pose.transform.matrix;
-        reticle.matrix.fromArray(lastHit);
-        reticle.visible = true;
-      } else {
-        reticle.visible = false;
+  const raycaster = new THREE.Raycaster();
+
+  function place(camera, sx, sy) {
+    const camPos = camera.position.clone();
+
+    // Sample feature points in a small grid around the tap.
+    const pts = [];
+    let centre = null;
+    for (const dy of [-0.06, -0.03, 0, 0.03, 0.06]) {
+      for (const dx of [-0.06, -0.03, 0, 0.03, 0.06]) {
+        const x = THREE.MathUtils.clamp(sx + dx, 0, 1), y = THREE.MathUtils.clamp(sy + dy, 0, 1);
+        const hit = XR8.XrController.hitTest(x, y, ['FEATURE_POINT'])[0];
+        if (!hit) continue;
+        const p = new THREE.Vector3(hit.position.x, hit.position.y, hit.position.z);
+        const d = p.distanceTo(camPos);
+        if (d < 0.2 || d > 8) continue;
+        pts.push(p);
+        if (dx === 0 && dy === 0) centre = p;
       }
     }
-    renderer.render(scene, camera);
-  });
 
-  exitHandler = () => session.end();
-  session.addEventListener('end', () => location.reload());
-}
+    const toCam = (from) => { const v = camPos.clone().sub(from); v.y = 0; return v.normalize(); };
+    let pos, normal;
+    onFloor = false;
 
-// ---------- 2b. Hang it on a wall with camera + gyro (fallback) ----------
+    if (pts.length) {
+      pos = centre || pts.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(pts.length);
+      if (pos.y < 0.15) {
+        // Tapped the floor: stand the poster up on that spot, facing you.
+        onFloor = true;
+        normal = toCam(pos);
+        pos.y = (ASPECT * poster.scale.x) / 2;
+      } else {
+        const wallPts = pts.filter((p) => p.y > 0.15 && p.distanceTo(pos) < 0.6);
+        normal = fitWallNormal(wallPts);
+        const facing = toCam(pos);
+        if (normal && normal.dot(facing) < 0) normal.negate();
+        if (!normal || normal.dot(facing) < 0.35) normal = facing; // unreliable fit: face the viewer
+      }
+    } else {
+      // Plain wall with no texture: put it a set distance along the tap direction.
+      raycaster.setFromCamera(new THREE.Vector2(sx * 2 - 1, -(sy * 2 - 1)), camera);
+      pos = camPos.clone().addScaledVector(raycaster.ray.direction, FALLBACK_DISTANCE);
+      normal = toCam(pos);
+    }
 
-const Q_WORLD = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -90° around X
-const Z_AXIS = new THREE.Vector3(0, 0, 1);
-
-function orientationToQuaternion(q, alpha, beta, gamma, screenAngle) {
-  const d = THREE.MathUtils.DEG2RAD;
-  q.setFromEuler(new THREE.Euler(beta * d, alpha * d, -gamma * d, 'YXZ'));
-  q.multiply(Q_WORLD);
-  q.multiply(new THREE.Quaternion().setFromAxisAngle(Z_AXIS, -screenAngle * d));
-}
-
-async function startGyro() {
-  // Both permission prompts must be requested inside the tap, before any await.
-  const motionPermission = (typeof DeviceOrientationEvent !== 'undefined' &&
-    typeof DeviceOrientationEvent.requestPermission === 'function')
-    ? DeviceOrientationEvent.requestPermission() : Promise.resolve('granted');
-  const cameraPromise = navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-  });
-  enterMode('gyro');
-
-  const [perm, stream] = await Promise.all([motionPermission, cameraPromise]);
-  if (perm !== 'granted') throw new Error('Motion permission denied');
-  const feed = $('camfeed');
-  feed.srcObject = stream;
-  await feed.play();
-
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.domElement.className = 'ar';
-  stage.appendChild(renderer.domElement);
-
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 50);
-  const poster = makePoster({ frame: true });
-  poster.visible = false;
-  poster.scale.setScalar(START_WIDTH_M);
-  scene.add(poster);
-
-  // Match the virtual camera's field of view to the real camera image on screen.
-  function resize() {
-    const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(w, h);
-    camera.aspect = w / h;
-    const vw = feed.videoWidth || 1080, vh = feed.videoHeight || 1920;
-    const longFov = 64 * THREE.MathUtils.DEG2RAD;  // typical phone main camera
-    const half = Math.tan(longFov / 2);
-    const vHalf = vh >= vw ? half : half * (vh / vw);   // vertical half-FOV of the camera image
-    const scale = Math.max(w / vw, h / vh);              // object-fit: cover
-    const visibleFrac = h / (vh * scale);
-    camera.fov = 2 * Math.atan(vHalf * visibleFrac) * THREE.MathUtils.RAD2DEG;
-    camera.updateProjectionMatrix();
-  }
-  resize();
-  window.addEventListener('resize', resize);
-  feed.addEventListener('loadedmetadata', resize);
-
-  let orient = null;
-  const onOrient = (e) => { if (e.alpha !== null) orient = e; };
-  window.addEventListener('deviceorientation', onOrient);
-
-  hint.textContent = 'Point at a wall, then tap Place here';
-
-  placeHandler = () => {
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-    poster.position.copy(dir.multiplyScalar(GYRO_DISTANCE_M));
-    poster.lookAt(0, poster.position.y, 0);
+    poster.position.copy(pos).addScaledVector(normal, 0.01);
+    poster.lookAt(poster.position.clone().add(normal));
     poster.visible = true;
     video.play();
-    $('btnPlace').textContent = 'Move here';
-    hint.textContent = 'Use − / + to resize';
-  };
-  sizeHandler = (k) => poster.scale.setScalar(THREE.MathUtils.clamp(poster.scale.x * k, 0.2, 6));
+    hint.textContent = pts.length ? 'Tap anywhere to move it' : 'Tap again to move it';
+  }
 
-  renderer.setAnimationLoop(() => {
-    if (orient) {
-      const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-      orientationToQuaternion(camera.quaternion, orient.alpha, orient.beta, orient.gamma, screenAngle);
-    }
-    renderer.render(scene, camera);
+  await runXR({
+    worldTracking: true,
+    onStart: ({ scene, camera, canvas }) => {
+      scene.add(poster);
+      const onTap = (cx, cy) => place(camera, cx / window.innerWidth, cy / window.innerHeight);
+      canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault(); // stops the follow-up click from placing it twice
+        if (e.touches.length === 1) onTap(e.touches[0].clientX, e.touches[0].clientY);
+      }, { passive: false });
+      canvas.addEventListener('click', (e) => onTap(e.clientX, e.clientY));
+    },
   });
-
-  exitHandler = () => { stream.getTracks().forEach((t) => t.stop()); location.reload(); };
 }
 
-// ---------- home screen wiring ----------
+// ---------- home screen ----------
 
-let xrSupported = false;
-if (navigator.xr && navigator.xr.isSessionSupported) {
-  navigator.xr.isSessionSupported('immersive-ar').then((ok) => {
-    xrSupported = ok;
-    if (ok) $('wallHint').textContent = 'Uses your phone’s AR to stick it to a real wall';
-  }).catch(() => {});
-}
-
-$('btnScan').onclick = () => {
-  unlockVideo();
-  startScan().catch(showError);
-};
-$('btnWall').onclick = () => {
-  unlockVideo();
-  (xrSupported ? startWebXR() : startGyro()).catch(showError);
-};
+$('btnScan').onclick = () => { unlockVideo(); startScan().catch(showError); };
+$('btnWall').onclick = () => { unlockVideo(); startWall().catch(showError); };
 
 // On a computer, show a QR code so people can jump to their phone.
-const isTouch = matchMedia('(pointer: coarse)').matches;
-if (!isTouch) {
+if (!matchMedia('(pointer: coarse)').matches) {
+  const url = location.href.split('#')[0];
   const qr = qrcode(0, 'M');
-  qr.addData(location.href.split('#')[0]);
+  qr.addData(url);
   qr.make();
   $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
-  $('url').textContent = location.href.split('#')[0];
+  $('url').textContent = url;
   $('desktop').hidden = false;
 }
 if (!window.isSecureContext) {
