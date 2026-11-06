@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Moeckel Pond Seasons · AR</title>
+<meta name="description" content="Point your phone at the Moeckel Pond poster to watch it come to life, or hang it on any wall.">
+<meta property="og:title" content="Moeckel Pond Seasons · AR">
+<meta property="og:image" content="assets/poster.jpg">
+<meta name="theme-color" content="#0f1a14">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/",
+    "mindar-image-three": "./vendor/mindar/mindar-image-three.prod.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<!-- Home screen -->
+<main id="home">
+  <img class="hero" src="assets/poster.jpg" alt="The Moeckel Pond mill in spring">
+  <div class="panel">
+    <h1>Moeckel Pond Seasons</h1>
+    <p class="sub">Watch the poster change with the seasons.</p>
+
+    <button id="btnScan" class="primary">
+      <strong>Scan the poster</strong>
+      <span>Point your camera at the printed poster</span>
+    </button>
+    <button id="btnWall">
+      <strong>Hang it on a wall</strong>
+      <span id="wallHint">Place the video on any wall around you</span>
+    </button>
+
+    <div id="desktop" hidden>
+      <p>Open this page on your phone to use AR:</p>
+      <div id="qr"></div>
+      <p class="url" id="url"></p>
+    </div>
+    <p id="error" class="error" hidden></p>
+  </div>
+</main>
+
+<!-- Camera views -->
+<div id="stage" hidden>
+  <video id="camfeed" playsinline muted autoplay></video>
+  <div id="mindar"></div>
+</div>
+
+<!-- Controls shown on top of any AR mode (also the WebXR DOM overlay root) -->
+<div id="overlay" hidden>
+  <div id="hint" class="hint"></div>
+  <div class="bar" id="bar">
+    <button id="btnExit" aria-label="Exit">✕</button>
+    <button id="btnSmaller" class="placeonly" aria-label="Smaller">−</button>
+    <button id="btnPlace" class="gyroonly">Place here</button>
+    <button id="btnBigger" class="placeonly" aria-label="Bigger">+</button>
+    <button id="btnSound" aria-label="Sound">🔊</button>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
