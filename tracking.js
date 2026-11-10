@@ -3,6 +3,7 @@ import {measureWall} from './tracking/wall-fit.js'
 
 const asset = (path) => new URL('./tracking/' + path, import.meta.url)
 const ASPECT = 9 / 16
+const FALLBACK_DISTANCE = 1.5 // metres in front when a wall can't be measured
 let runtime
 let current
 
@@ -140,15 +141,16 @@ export function startTracking({mode, canvas, video, posterUrl, onStatus = () => 
     setMedia(false)
     status(scan ? 'scanning' : 'searching', scan ? scanHint : wallHint)
   }
+  const setOpacity = (value) => {
+    material.opacity = value
+    if (frame) { frame.material.transparent = value < 1; frame.material.opacity = value }
+  }
   const place = () => {
-    // A stale plane after a camera interruption must never qualify for placement.
-    if (stopped || scan || !mesh || !worldGood || isPlaced || !candidate || stable < 3 ||
-        performance.now() - measuredAt > 220) return false
-    mesh.position.copy(candidate.position).addScaledVector(candidate.normal, 0.005)
-    mesh.rotation.set(0, Math.atan2(candidate.normal.x, candidate.normal.z), 0)
+    // Placement always works once the camera runs: it locks the live preview where it is,
+    // on the measured wall if one was found, otherwise at a fixed distance in front.
+    if (stopped || scan || !mesh || isPlaced || !mesh.visible) return false
     mesh.scale.setScalar(width)
-    mesh.visible = true
-    material.opacity = 1
+    setOpacity(1)
     isPlaced = true
     setMedia(true)
     status('placed', 'Artwork placed on the wall.')
@@ -196,7 +198,7 @@ export function startTracking({mode, canvas, video, posterUrl, onStatus = () => 
     const reality = processCpuResult?.reality
     worldGood = world && reality?.trackingStatus === 'NORMAL'
     // A still remains visible while the first video frame is being decoded.
-    if (video.readyState >= 2 && material.map !== filmTexture) {
+    if (!video.paused && video.readyState >= 2 && material.map !== filmTexture) {
       material.map = filmTexture
       material.needsUpdate = true
     }
@@ -215,33 +217,58 @@ export function startTracking({mode, canvas, video, posterUrl, onStatus = () => 
       return
     }
     if (isPlaced) {
-      mesh.visible = worldGood
-      setMedia(worldGood)
-      status(worldGood ? 'placed' : 'recovering', worldGood ? 'Artwork placed on the wall.' : 'Return to the wall and move slowly to recover tracking.')
+      mesh.visible = true
+      setMedia(true)
+      status('placed', 'Artwork placed on the wall.')
       return
     }
-    if (!worldGood) {
-      stable = 0
-      candidate = null
-      status('searching', wallHint)
-      return
+    // Measure the wall from tracked feature points when possible (about 10 times a second).
+    if (worldGood && now - measuredAt >= 95) {
+      measuredAt = now
+      const wall = measureWall(THREE, camera, reality.worldPoints)
+      if (wall && candidate && wall.normal.dot(candidate.normal) > 0.95 &&
+          Math.abs(wall.position.clone().sub(candidate.position).dot(candidate.normal)) < 0.07) {
+        wall.normal.lerp(candidate.normal, 0.45).normalize()
+        wall.at = now
+        stable++
+        candidate = wall
+      } else if (wall) {
+        wall.at = now
+        stable = 1
+        candidate = wall
+      } else if (now - (candidate?.at || 0) > 600) {
+        stable = 0
+        candidate = null
+      }
     }
-    if (now - measuredAt < 95) return
-    measuredAt = now
-    const wall = measureWall(THREE, camera, reality.worldPoints)
-    if (!wall) {
-      stable = 0
-      candidate = null
-      status('searching', wallHint)
-      return
+    // Live preview: on the measured wall, or 1.5 m straight ahead when the wall has too
+    // little texture to measure. Either way the artwork shows and can be placed.
+    const measured = Boolean(candidate && stable >= 2)
+    let position, normal
+    if (measured) {
+      position = candidate.position.clone()
+      normal = candidate.normal.clone()
+    } else {
+      const direction = camera.getWorldDirection(new THREE.Vector3())
+      position = camera.position.clone().addScaledVector(direction, FALLBACK_DISTANCE)
+      normal = direction.negate()
+      normal.y = 0
+      if (normal.lengthSq() < 1e-4) normal.set(0, 0, 1)
+      normal.normalize()
     }
-    if (candidate && wall.normal.dot(candidate.normal) > 0.95 &&
-        Math.abs(wall.position.clone().sub(candidate.position).dot(candidate.normal)) < 0.07) {
-      wall.normal.lerp(candidate.normal, 0.45).normalize()
-      stable++
-    } else stable = 1
-    candidate = wall
-    status(stable >= 3 ? 'wall-ready' : 'searching', stable >= 3 ? 'Wall detected. Place the artwork.' : 'Hold steady while the wall is measured.')
+    position.addScaledVector(normal, 0.005)
+    const target = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.atan2(normal.x, normal.z), 0))
+    if (!mesh.visible) {
+      mesh.position.copy(position)
+      mesh.quaternion.copy(target)
+    } else {
+      mesh.position.lerp(position, 0.3)
+      mesh.quaternion.slerp(target, 0.3)
+    }
+    mesh.scale.setScalar(width)
+    mesh.visible = true
+    setOpacity(0.6)
+    status('wall-ready', measured ? 'Wall found. Tap Place here.' : 'Point at your wall, then tap Place here.')
   }
   const setupScene = () => {
     if (stopped) return
@@ -252,6 +279,8 @@ export function startTracking({mode, canvas, video, posterUrl, onStatus = () => 
     filmTexture = new THREE.VideoTexture(video)
     stillTexture.colorSpace = filmTexture.colorSpace = THREE.SRGBColorSpace
     material = new THREE.MeshBasicMaterial({map: stillTexture, toneMapped: false, transparent: true})
+    // Draw the artwork just in front of its frame even while the preview is see-through.
+    Object.assign(material, {polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4})
     mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, ASPECT), material)
     if (!scan) {
       frame = new THREE.Mesh(new THREE.BoxGeometry(1.024, ASPECT + 0.024, 0.017), new THREE.MeshBasicMaterial({color: 0x2b2118}))
@@ -273,7 +302,7 @@ export function startTracking({mode, canvas, video, posterUrl, onStatus = () => 
     }
     status('loading', 'Preparing the camera and motion tracking…')
     const [motion, library, sdk, target] = await Promise.all([
-      askMotion(), import('./tracking/three/three.module.js'), engine(), scan ? readTarget() : null
+      scan ? false : askMotion(), import('./tracking/three/three.module.js'), engine(), scan ? readTarget() : null
     ])
     if (stopped) return
     THREE = library
@@ -301,7 +330,7 @@ export function startTracking({mode, canvas, video, posterUrl, onStatus = () => 
     xr.XrController.configure({
       disableWorldTracking: !world,
       enableWorldPoints: !scan,
-      scale: world ? 'absolute' : 'responsive',
+      scale: 'responsive', // no calibration walk needed before tracking starts
       imageTargetData: scan ? [target] : []
     })
     xr.Threejs.configure({renderCameraTexture: false})

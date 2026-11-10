@@ -6,7 +6,6 @@ const DEFAULT_WIDTH = 0.9;
 // Hit poses use their local +Y axis as the surface normal.
 // Reject surfaces that tilt more than 20 degrees away from vertical.
 const MAX_WALL_NORMAL_Y = Math.sin(20 * Math.PI / 180);
-const MIN_STABLE_TIME_MS = 120;
 
 export async function supportsNativeWall() {
   try {
@@ -59,7 +58,7 @@ function createArtwork(T, video, posterUrl) {
       guide.scale.setScalar(width);
     },
     updateFrame() {
-      const hasFrame = video.readyState >= 2 && video.videoWidth > 0;
+      const hasFrame = !video.paused && video.readyState >= 2 && video.videoWidth > 0;
       const texture = hasFrame ? film : still;
       if (artMaterial.map !== texture) {
         artMaterial.map = texture;
@@ -220,31 +219,47 @@ export function startWebXR({
     let stableSince = null;
     clearHistory = () => { stableSince = null; };
 
+    const viewMatrix = new T.Matrix4();
+    const forward = new T.Vector3();
+    const FALLBACK_DISTANCE = 1.5;
+
     function updateCandidate(time, frame, viewer) {
+      // Use the first real surface hit: a wall hangs flush; a floor or table gets the
+      // artwork standing upright on it, facing you. With no surface at all, the artwork
+      // floats 1.5 m ahead so it can always be seen and placed.
       let currentHit = null;
+      let measured = false;
+      const viewerPos = viewer.transform.position;
       for (const hit of frame.getHitTestResults(hits)) {
         const pose = hit.getPose(refSpace);
         if (!pose || pose.emulatedPosition) continue;
         hitMatrix.fromArray(pose.transform.matrix);
         normal.setFromMatrixColumn(hitMatrix, 1).normalize();
-        if (Math.abs(normal.y) > MAX_WALL_NORMAL_Y) continue;
         position.setFromMatrixPosition(hitMatrix);
-        towardViewer.copy(viewer.transform.position).sub(position);
+        towardViewer.set(viewerPos.x, viewerPos.y, viewerPos.z).sub(position);
         const distance = towardViewer.length();
         if (distance < 0.18 || distance > 6) continue;
-        normal.y = 0;
-        normal.normalize();
-        if (normal.dot(towardViewer) < 0) normal.negate();
+        const isWall = Math.abs(normal.y) <= MAX_WALL_NORMAL_Y;
+        if (isWall) {
+          normal.y = 0;
+          normal.normalize();
+          if (normal.dot(towardViewer) < 0) normal.negate();
+        } else {
+          const floorUp = normal.y > 0;
+          normal.copy(towardViewer).setY(0).normalize();
+          if (floorUp) position.y += POSTER_HEIGHT * width / 2;
+        }
         currentHit = hit;
+        measured = isWall;
         break;
       }
-
       if (!currentHit) {
-        stableSince = null;
-        requestPlace = false;
-        artwork.root.visible = false;
-        report('searching', 'Move slowly across a well-lit wall with visible detail.');
-        return;
+        viewMatrix.fromArray(viewer.transform.matrix);
+        forward.setFromMatrixColumn(viewMatrix, 2).negate().normalize();
+        position.set(viewerPos.x, viewerPos.y, viewerPos.z).addScaledVector(forward, FALLBACK_DISTANCE);
+        normal.copy(forward).negate().setY(0);
+        if (normal.lengthSq() < 1e-4) normal.set(0, 0, 1);
+        normal.normalize();
       }
       if (stableSince === null || previousPosition.distanceToSquared(position) > 0.12 ** 2 ||
         previousNormal.dot(normal) < 0.96) stableSince = time;
@@ -256,19 +271,14 @@ export function startWebXR({
       artwork.root.matrix.copy(artworkMatrix);
       artwork.root.matrixWorldNeedsUpdate = true;
       artwork.root.visible = true;
-      if (time - stableSince < MIN_STABLE_TIME_MS) {
-        requestPlace = false;
-        report('searching', 'Hold steady while the wall comes into focus.');
-        return;
-      }
-      report('wall-ready', 'Wall found. Tap to hang the artwork.');
+      report('wall-ready', measured ? 'Wall found. Tap to hang the artwork.' : 'Point at your wall, then tap to place.');
       if (!requestPlace) return;
       requestPlace = false;
       placed = true;
       artwork.setPlaced(true);
       report('placed', 'Artwork placed.');
       video.play()?.catch(() => {});
-      if (typeof currentHit.createAnchor !== 'function') return;
+      if (!currentHit || typeof currentHit.createAnchor !== 'function') return;
       // Hit anchors follow XR's +Y-normal convention. Preserve the mounted,
       // gravity-upright pose relative to that anchor as the map refines.
       anchorOffset.copy(hitMatrix).invert().multiply(artworkMatrix);
