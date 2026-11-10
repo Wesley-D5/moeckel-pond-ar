@@ -1,69 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <!-- This product includes the XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. License: https://github.com/8thwall/engine/blob/main/LICENSE -->
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<title>Moeckel Pond Seasons · AR</title>
-<meta name="description" content="Point your phone at the Moeckel Pond poster to watch it come to life, or hang it on any wall.">
-<meta property="og:title" content="Moeckel Pond Seasons · AR">
-<meta property="og:image" content="assets/poster.jpg">
-<meta name="theme-color" content="#0f1a14">
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css">
-
-<!-- 8th Wall engine (self-hosted; loads the tracking chunk up front) + its helper UI -->
-<script src="./vendor/8thwall/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
-<script src="./vendor/xrextras/xrextras.js" crossorigin="anonymous"></script>
-
-<script type="importmap">
-{ "imports": { "three": "./vendor/three/three.module.js" } }
-</script>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121711"><meta name="color-scheme" content="dark">
+<title>Moeckel Pond Seasons · Living Artwork</title>
+<meta name="description" content="See Moeckel Pond through four seasons. Animate a printed poster or hang the artwork on your wall in augmented reality.">
+<meta property="og:title" content="Moeckel Pond Seasons"><meta property="og:description" content="A living landscape in four seasons."><meta property="og:image" content="https://wesley-d5.github.io/moeckel-pond-ar/assets/poster.jpg">
+<link rel="icon" href="./mark.svg"><link rel="stylesheet" href="./style.css"><link rel="preload" as="font" type="font/woff2" href="./fonts/instrument-serif.woff2" crossorigin><link rel="preload" as="image" href="./assets/spring.webp">
 </head>
-<body>
-
-<!-- Home screen -->
-<main id="home">
-  <img class="hero" src="assets/poster.jpg" alt="The Moeckel Pond mill in spring">
-  <div class="panel">
-    <h1>Moeckel Pond Seasons</h1>
-    <p class="sub">Watch the poster change with the seasons.</p>
-
-    <button id="btnScan" class="primary">
-      <strong>Scan the poster</strong>
-      <span>Point your camera at the printed poster</span>
-    </button>
-    <button id="btnWall">
-      <strong>Hang it on a wall</strong>
-      <span>Tap any wall around you and it stays there</span>
-    </button>
-
-    <div id="desktop" hidden>
-      <p>Open this page on your phone to use AR:</p>
-      <div id="qr"></div>
-      <p class="url" id="url"></p>
-    </div>
-    <p id="error" class="error" hidden></p>
-    <p class="credit">AR by the <a href="https://8thwall.org">8th Wall</a> engine ·
-      © 2026 Niantic Spatial, Inc. · <a href="https://github.com/8thwall/engine/blob/main/LICENSE">License</a></p>
-  </div>
-</main>
-
-<!-- Camera view: the 8th Wall canvas is added here -->
-<div id="stage" hidden></div>
-
-<!-- Controls on top of the camera view -->
-<div id="overlay" hidden>
-  <div id="hint" class="hint"></div>
-  <div class="bar" id="bar">
-    <button id="btnExit" aria-label="Exit">✕</button>
-    <button id="btnSmaller" class="placeonly" aria-label="Smaller">−</button>
-    <button id="btnBigger" class="placeonly" aria-label="Bigger">+</button>
-    <button id="btnSound" aria-label="Sound">🔊</button>
-  </div>
-</div>
-
-<script type="module" src="app.js"></script>
-</body>
+<body><div id="root"></div><noscript><h1>Moeckel Pond Seasons</h1><p>Enable JavaScript to explore the artwork in AR.</p><a href="./assets/poster.jpg">View the poster</a> · <a href="./assets/poster-540.mp4">Watch the film</a></noscript><script type="module" src="./gallery.js"></script></body>
 </html>

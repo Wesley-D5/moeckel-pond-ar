@@ -1,65 +1,29 @@
-# Moeckel Pond Seasons: web AR
+# Moeckel Pond Seasons
 
-Live at **https://wesley-d5.github.io/moeckel-pond-ar/**
+Explore the mill through four seasons, play its original 41-second film, scan the printed artwork, or place it on a wall.
 
-A static website. People open it on their phone and either:
+[Open the live artwork](https://wesley-d5.github.io/moeckel-pond-ar/) · [Get the print](https://wesley-d5.github.io/moeckel-pond-ar/assets/poster.jpg)
 
-- **Scan the poster**: point the camera at the printed poster (the video's first frame). The video plays on top of it, locked to the paper.
-- **Hang it on a wall**: tap any wall and the video stays fixed there in 3D, even as you walk around.
+## Camera modes
 
-Built on the **8th Wall engine** (Niantic Spatial), self-hosted from this folder, with three.js.
+- **Scan a print** uses the self-hosted 8th Wall Distributed Engine and the original poster target. On supported phones the scanner combines the image pose with world tracking. Small pose changes are filtered, and a brief loss of sight is bridged when the world pose is reliable. Without motion permission, scanning can use image tracking alone.
+- **Apple Quick Look** uses vertical-anchored USDZ frames. The four-season asset uses a RealityKit MaterialX shader to crossfade seasonal images over 40 seconds on compatible devices. Other viewers can display the spring material. Each individual season also has a static framed model.
+- **Animated wall placement** plays the original film in the browser. On devices with immersive WebXR it uses measured vertical hit-test results and native anchors when available. The 8th Wall path fits a vertical surface to tracked world points and waits for repeated stable measurements. Textured walls in even light work best.
+- **Camera photos** are captured from the composited 8th Wall frame when tracking is locked. The camera closes during review. The visitor can download the JPEG or share it using the operating system.
+- **Desktop and camera-free viewing** include a depth-based artwork preview, keyboard season selection, film playback and a QR handoff to a phone.
 
-## Devices
+## Local development
 
-| Device | Scan the poster | Hang it on a wall |
-|---|---|---|
-| iPhone / iPad (Safari, iOS 16.4+) | ✅ | ✅ world tracking |
-| Android (Chrome, Samsung Internet, Firefox, Edge) | ✅ | ✅ world tracking |
-| Laptop / desktop | ✅ with a webcam | Shows a QR code to open it on a phone |
+Use Node.js and npm. Run `npm ci` and `npm run build` after editing the React components in `src/`. Serve the published files using a static HTTP server on localhost. Device camera testing needs HTTPS.
 
-Browsers can't use the iPhone's LiDAR (Apple doesn't expose it to the web), so 8th Wall tracks
-the world from the camera image and motion sensors instead. On a plain, featureless white wall
-it can't measure the wall's angle, so the video faces you at about 1.5 m. Textured walls (brick,
-wood, posters, frames) give the best fit.
+The React gallery is precompiled. The AR engine, image target, Three.js modules, fonts, seasonal artwork and film are served locally. GPU depth maps are precomputed, so the page does not load a depth estimation model.
 
-## Hosting
+## Artwork and tracking data
 
-Free on GitHub Pages: no server, HTTPS included (the camera needs it), and nothing to renew.
-Every library and media file is in this folder, and the engine makes no calls to outside services
-for the features used here.
+The original media URLs remain `assets/poster.jpg` and `assets/poster-540.mp4`. Print the full poster with its original proportions. Keep the central mill and shoreline unobstructed.
 
-## Files
+`content.js` maps season names to film cue points, stills and USDZ files. Each preview image has a matching `-depth.webp` depth map. Changing the print requires regenerating the 8th Wall image target and confirming its crop geometry in `tracking.js`. The full print and its tracked central crop have different aspect ratios.
 
-- `index.html`, `app.js`, `style.css`: the site
-- `assets/poster.jpg`: the poster (first frame of the video). Print this.
-- `assets/poster-540.mp4`: the video (keep it under 25 MB for GitHub's web uploader)
-- `image-targets/poster.json` + `poster_luminance.jpg`: the tracking data for the poster
-- `vendor/8thwall/`: the 8th Wall engine binary (do not modify, per its license)
-- `vendor/xrextras/`: 8th Wall's loading and permission screens (MIT)
-- `vendor/three/`: three.js r183 (MIT)
+## Credits
 
-## Changing the poster or video
-
-- New video: replace `assets/poster-540.mp4`, keeping 16:9.
-- New poster image: replace `assets/poster.jpg`, then regenerate the tracking data with 8th Wall's tool:
-
-  ```
-  npx @8thwall/image-target-cli@latest
-  ```
-
-  Answer: the path to `assets/poster.jpg`, `flat`, `Y` (default crop), output folder `image-targets`,
-  name `poster`. Commit the new `image-targets/poster.json` and `poster_luminance.jpg`.
-
-## Printing tips
-
-- Print `assets/poster.jpg` exactly, on matte paper if possible; glare hurts tracking.
-- The engine tracks the centre 4:3 area of the poster, so don't cover the middle with text or logos.
-- A4/Letter or bigger works best.
-
-## License notes
-
-This product includes the XR Engine software developed by Niantic Spatial, Inc.
-Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
-License: https://github.com/8thwall/engine/blob/main/LICENSE. The engine is provided "as is",
-without warranty; see the license. Free for this use: it may not be used in a paid product whose
-value comes mainly from the engine.
+This product includes the XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. The self-hosted distributed engine is provided under its [binary license](https://github.com/8thwall/engine/blob/main/LICENSE). Three.js is distributed under its MIT license. Depth images were generated with Depth Anything V2 Small. License notices accompany the bundled engine, Three.js, React packages and fonts.

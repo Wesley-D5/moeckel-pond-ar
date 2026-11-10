@@ -1,0 +1,14 @@
+{
+  "name": "poster",
+  "type": "PLANAR",
+  "properties": {
+    "left": 0,
+    "top": 240,
+    "width": 1080,
+    "height": 1440,
+    "isRotated": true,
+    "originalWidth": 1080,
+    "originalHeight": 1920
+  },
+  "imagePath": "poster_luminance.jpg"
+}
