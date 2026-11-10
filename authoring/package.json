@@ -1,0 +1,16 @@
+{
+  "name": "moeckel-pond-authoring",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "bundle": "node bundle.mjs"
+  },
+  "dependencies": {
+    "three": "0.183.2",
+    "jsfeat": "0.0.8"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.0"
+  }
+}

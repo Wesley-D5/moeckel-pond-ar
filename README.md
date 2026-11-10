@@ -1,29 +1,47 @@
-# Moeckel Pond Seasons
+# Moeckel Pond — The Wall Film
 
-Explore the mill through four seasons, play its original 41-second film, scan the printed artwork, or place it on a wall.
+[Place the film on your wall](https://wesley-d5.github.io/moeckel-pond-ar/) · [Open the original MP4 wall player](https://wesley-d5.github.io/moeckel-pond-ar/#original-film)
 
-[Open the live artwork](https://wesley-d5.github.io/moeckel-pond-ar/) · [Get the print](https://wesley-d5.github.io/moeckel-pond-ar/assets/poster.jpg)
+A static, self-hosted artwork. Open the site in Safari on iPhone or iPad and choose **Place the film on a wall**. In Apple Quick Look, select AR and move slowly across a vertical surface. The film runs for 41 seconds with its original soundtrack.
 
-## Camera modes
+## The two wall players
 
-- **Scan a print** uses the self-hosted 8th Wall Distributed Engine and the original poster target. On supported phones the scanner combines the image pose with world tracking. Small pose changes are filtered, and a brief loss of sight is bridged when the world pose is reliable. Without motion permission, scanning can use image tracking alone.
-- **Apple Quick Look** uses vertical-anchored USDZ frames. The four-season asset uses a RealityKit MaterialX shader to crossfade seasonal images over 40 seconds on compatible devices. Other viewers can display the spring material. Each individual season also has a static framed model.
-- **Animated wall placement** plays the original film in the browser. On devices with immersive WebXR it uses measured vertical hit-test results and native anchors when available. The 8th Wall path fits a vertical surface to tracked world points and waits for repeated stable measurements. Textured walls in even light work best.
-- **Camera photos** are captured from the composited 8th Wall frame when tracking is locked. The camera closes during review. The visitor can download the JPEG or share it using the operating system.
-- **Desktop and camera-free viewing** include a depth-based artwork preview, keyboard season selection, film playback and a QR handoff to a phone.
+- **Apple Quick Look** handles world tracking and vertical placement. The self-contained USDZ encodes all 995 source-frame times at 960 × 540 and 24 fps using animated texture tiles. Nearly identical patches reuse texture data. The package includes the original AAC soundtrack. The page launches it using an ordinary `a[rel=ar]` link with one image child. Serve USDZ files with `model/vnd.usdz+zip` and byte-range support.
+- **Place the full-quality film with your camera** plays the original 960 × 540, 24 fps MP4 directly. On iPhone, the MIT-licensed JSFeat tracker follows the visible texture of a wall on the device. Face the wall straight on when placing. The film pauses during tracking loss and resumes when the same wall detail returns. On compatible devices WebXR uses measured vertical surfaces. The player has controls to enable sound, move the film and release the camera.
 
-## Local development
+Camera access starts when someone chooses **Open camera** in the browser player. All tracking and rendering happen on the device. The site needs only static hosting.
 
-Use Node.js and npm. Run `npm ci` and `npm run build` after editing the React components in `src/`. Serve the published files using a static HTTP server on localhost. Device camera testing needs HTTPS.
+## Other artwork
 
-The React gallery is precompiled. The AR engine, image target, Three.js modules, fonts, seasonal artwork and film are served locally. GPU depth maps are precomputed, so the page does not load a depth estimation model.
+The **Living print** USDZ includes its own image anchor for the original spring image at a width of 25.4 cm. Its 18 physical panels turn through four seasons in a 24-second loop. Print the supplied landscape Letter PDF at actual size.
 
-## Artwork and tracking data
+The **Miniature** is an animated 31.6 cm tabletop model. The model and browser preview share their mesh and animation source. Three.js loads on demand to display the GLB. The film, printable artwork, fallback images and handoff codes are served with the site.
 
-The original media URLs remain `assets/poster.jpg` and `assets/poster-540.mp4`. Print the full poster with its original proportions. Keep the central mill and shoreline unobstructed.
+## Development
 
-`content.js` maps season names to film cue points, stills and USDZ files. Each preview image has a matching `-depth.webp` depth map. Changing the print requires regenerating the 8th Wall image target and confirming its crop geometry in `tracking.js`. The full print and its tracked central crop have different aspect ratios.
+Serve the directory containing `index.html` using a static server. Use HTTPS for device camera testing. GitHub Pages publishes the repository root. The alternative Sites checkout publishes `dist/`. All files needed to view the artwork are checked in.
 
-## Credits
+The optional `authoring/` directory contains the editable camera player, 3D preview and model generators. Run the following in that directory to rebuild the JavaScript modules.
 
-This product includes the XR Engine software developed by Niantic Spatial, Inc. Copyright © 2026 Niantic Spatial, Inc. All rights reserved. The self-hosted distributed engine is provided under its [binary license](https://github.com/8thwall/engine/blob/main/LICENSE). Three.js is distributed under its MIT license. Depth images were generated with Depth Anything V2 Small. License notices accompany the bundled engine, Three.js, React packages and fonts.
+```sh
+npm ci
+npm run bundle
+```
+
+To regenerate the models, install Python 3, Pillow, NumPy, FFmpeg and the OpenUSD CLI tools (`usdcat`, `usdzip`, `usdchecker`). The print PDF additionally uses ReportLab. Run the following from the GitHub Pages repository root.
+
+```sh
+python3 authoring/wall-film/build_wall_film.py assets/poster-540.mp4 authoring/wall-film/generated
+cp authoring/wall-film/generated/moeckel-wall-film.usdz models/wall-film.usdz
+python3 authoring/print/build_print.py --poster assets/poster.jpg --film assets/poster-540.mp4 --output models/living-print.usdz
+python3 authoring/make_print.py assets/poster.jpg assets/living-print.pdf
+python3 authoring/miniature/build.py
+cp authoring/miniature/moeckel-pond-miniature.usdz models/tabletop-mill.usdz
+python3 authoring/preview/export-glb.py authoring/miniature/scene.json preview/pond.glb
+```
+
+Asset authoring tools run offline. Model regeneration and JavaScript bundling are optional for deployment.
+
+## License
+
+The original application code and effect generators are distributed under the MIT license in `LICENSE`. Licensed dependencies retain their notices in `wall/`, `preview/` and `fonts/`. The supplied film, photographs, soundtrack and their extracted frames retain their original rights. Apple Quick Look is Apple's built-in viewer.

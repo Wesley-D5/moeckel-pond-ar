@@ -1,2 +1,9 @@
 node_modules/
 .DS_Store
+__pycache__/
+*.pyc
+authoring/miniature/textures/
+authoring/miniature/scene.json
+authoring/miniature/SeasonMill.usd*
+authoring/miniature/moeckel-pond-miniature.usdz
+authoring/wall-film/generated/

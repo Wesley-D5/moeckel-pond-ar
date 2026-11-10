@@ -1,8 +1,0 @@
-.photo-shutter{background:#f0f2e8;color:#1b281c;box-shadow:0 0 0 2px #ffffff4a}
-.photo-shutter:disabled{opacity:.55}
-.photo-review .photo-preview{display:block;width:100%;height:auto;max-height:53dvh;object-fit:contain;margin:0 auto 18px;background:#10140f;border-radius:5px}
-.photo-review .photo-actions{display:flex;gap:8px;align-items:stretch}
-.photo-review .photo-actions>*{flex:1;text-align:center}
-.photo-review .solid svg:first-child{margin-right:0}
-.photo-secondary{display:flex;align-items:center;justify-content:center;border:1px solid #58634f;border-radius:7px;font-size:12px;font-weight:600}
-.photo-error{max-width:210px;font-size:11px;color:#fff;text-shadow:0 1px 3px #000}

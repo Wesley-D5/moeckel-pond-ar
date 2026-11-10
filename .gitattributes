@@ -1,0 +1,6 @@
+*.pdf binary
+*.usdz binary
+*.glb binary
+preview/preview.js -diff linguist-generated=true
+wall/wall.js -diff linguist-generated=true
+wall/parts/*.js -diff linguist-generated=true

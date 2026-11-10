@@ -1,0 +1,115 @@
+#usda 1.0
+(
+    defaultPrim = "MoeckelPondFilm"
+    metersPerUnit = 1
+    upAxis = "Y"
+    timeCodesPerSecond = 24
+    framesPerSecond = 24
+    startTimeCode = 0
+    endTimeCode = 995
+    autoPlay = true
+    playbackMode = "loop"
+)
+def Xform "MoeckelPondFilm" (prepend apiSchemas = ["Preliminary_AnchoringAPI"]) {
+    uniform token preliminary:anchoring:type = "plane"
+    uniform token preliminary:planeAnchoring:alignment = "vertical"
+    def Scope "Materials" {
+def Material "Walnut" {
+token outputs:surface.connect = </MoeckelPondFilm/Materials/Walnut/Surface.outputs:surface>
+def Shader "Surface" {
+uniform token info:id = "UsdPreviewSurface"
+color3f inputs:diffuseColor = (0.076, 0.038, 0.02)
+float inputs:roughness = 0.62
+float inputs:metallic = 0
+
+token outputs:surface
+}
+}
+def Material "Bronze" {
+token outputs:surface.connect = </MoeckelPondFilm/Materials/Bronze/Surface.outputs:surface>
+def Shader "Surface" {
+uniform token info:id = "UsdPreviewSurface"
+color3f inputs:diffuseColor = (0.37, 0.27, 0.13)
+float inputs:roughness = 0.44
+float inputs:metallic = 0.62
+
+token outputs:surface
+}
+}
+def Material "Paper" {
+token outputs:surface.connect = </MoeckelPondFilm/Materials/Paper/Surface.outputs:surface>
+def Shader "Surface" {
+uniform token info:id = "UsdPreviewSurface"
+color3f inputs:diffuseColor = (0.83, 0.78, 0.65)
+float inputs:roughness = 0.96
+float inputs:metallic = 0
+
+token outputs:surface
+}
+}
+def Material "Backing" {
+token outputs:surface.connect = </MoeckelPondFilm/Materials/Backing/Surface.outputs:surface>
+def Shader "Surface" {
+uniform token info:id = "UsdPreviewSurface"
+color3f inputs:diffuseColor = (0, 0, 0)
+float inputs:roughness = 1
+float inputs:metallic = 0
+color3f inputs:emissiveColor.connect = </MoeckelPondFilm/Materials/Backing/Texture.outputs:rgb>
+token outputs:surface
+}
+def Shader "UV" {
+uniform token info:id = "UsdPrimvarReader_float2"
+string inputs:varname = "st"
+float2 outputs:result
+}
+def Shader "Texture" {
+uniform token info:id = "UsdUVTexture"
+asset inputs:file = @textures/opening.jpg@
+token inputs:sourceColorSpace = "sRGB"
+token inputs:wrapS = "clamp"
+token inputs:wrapT = "clamp"
+float2 inputs:st.connect = </MoeckelPondFilm/Materials/Backing/UV.outputs:result>
+float3 outputs:rgb
+}
+}
+{{FILM_MATERIALS}}
+}
+def Mesh "WalnutFrame" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+point3f[] points = [(-0.335, 0, 0.2055), (0.335, 0, 0.2055), (0.335, 0, -0.2055), (-0.335, 0, -0.2055), (-0.335, 0.014, 0.2055), (0.335, 0.014, 0.2055), (0.335, 0.014, -0.2055), (-0.335, 0.014, -0.2055), (-0.332, 0.023, 0.2025), (0.332, 0.023, 0.2025), (0.332, 0.023, -0.2025), (-0.332, 0.023, -0.2025), (-0.3215, 0.023, 0.192), (0.3215, 0.023, 0.192), (0.3215, 0.023, -0.192), (-0.3215, 0.023, -0.192), (-0.317, 0.0163, 0.1875), (0.317, 0.0163, 0.1875), (0.317, 0.0163, -0.1875), (-0.317, 0.0163, -0.1875)]
+int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+int[] faceVertexIndices = [0, 2, 1, 0, 3, 2, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7, 4, 5, 9, 4, 9, 8, 5, 6, 10, 5, 10, 9, 6, 7, 11, 6, 11, 10, 7, 4, 8, 7, 8, 11, 8, 9, 13, 8, 13, 12, 9, 10, 14, 9, 14, 13, 10, 11, 15, 10, 15, 14, 11, 8, 12, 11, 12, 15, 12, 13, 17, 12, 17, 16, 13, 14, 18, 13, 18, 17, 14, 15, 19, 14, 19, 18, 15, 12, 16, 15, 16, 19]
+uniform token subdivisionScheme = "none"
+rel material:binding = </MoeckelPondFilm/Materials/Walnut>
+}
+def Mesh "InsetBrass" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+point3f[] points = [(-0.3195, 0.0185, 0.19), (0.3195, 0.0185, 0.19), (0.3195, 0.0185, -0.19), (-0.3195, 0.0185, -0.19), (-0.3185, 0.0193, 0.189), (0.3185, 0.0193, 0.189), (0.3185, 0.0193, -0.189), (-0.3185, 0.0193, -0.189), (-0.3175, 0.0178, 0.188), (0.3175, 0.0178, 0.188), (0.3175, 0.0178, -0.188), (-0.3175, 0.0178, -0.188)]
+int[] faceVertexCounts = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+int[] faceVertexIndices = [0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7, 4, 5, 9, 4, 9, 8, 5, 6, 10, 5, 10, 9, 6, 7, 11, 6, 11, 10, 7, 4, 8, 7, 8, 11]
+uniform token subdivisionScheme = "none"
+rel material:binding = </MoeckelPondFilm/Materials/Bronze>
+}
+def Mesh "Mat" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+point3f[] points = [(-0.3175, 0.0158, 0.188), (0.3175, 0.0158, 0.188), (0.3175, 0.0158, -0.188), (-0.3175, 0.0158, -0.188)]
+int[] faceVertexCounts = [3, 3]
+int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+uniform token subdivisionScheme = "none"
+rel material:binding = </MoeckelPondFilm/Materials/Paper>
+}
+def Mesh "FirstFrame" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+point3f[] points = [(-0.292, 0.01608, 0.16425), (0.292, 0.01608, 0.16425), (0.292, 0.01608, -0.16425), (-0.292, 0.01608, -0.16425)]
+int[] faceVertexCounts = [3, 3]
+int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+uniform token subdivisionScheme = "none"
+rel material:binding = </MoeckelPondFilm/Materials/Backing>
+texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (interpolation = "vertex")
+}
+{{FILM_ANIMATION}}
+def SpatialAudio "Soundtrack" {
+  uniform asset filePath = @soundtrack.m4a@
+  uniform token auralMode = "nonSpatial"
+  uniform token playbackMode = "onceFromStart"
+  uniform timecode startTime = 0
+  uniform double mediaOffset = 0
+  double gain = 1
+}
+}

@@ -1,0 +1,16 @@
+.wall-room{position:fixed;inset:0;width:100%;height:100%;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;overflow:hidden;background:#101512;color:#fafbf5;font:500 15px/1.4 system-ui,-apple-system,sans-serif;isolation:isolate;color-scheme:dark}
+.wall-room::backdrop{background:#101512}.wall-room[data-route=webxr],.wall-room[data-route=webxr]::backdrop{background:transparent}
+.wall-stage,.wall-lens,.wall-xr-surface{position:absolute;inset:0;display:block;width:100%;height:100%}.wall-stage{overflow:hidden;touch-action:manipulation}
+.wall-lens{object-fit:cover}.wall-film{position:absolute;top:0;left:0;object-fit:fill;transform-origin:0 0;visibility:hidden;pointer-events:none;max-width:none;max-height:none;border:0;will-change:transform;backface-visibility:hidden}
+.wall-native-film{position:absolute;width:1px;height:1px;left:-10px;top:0}.wall-xr-surface{opacity:0;pointer-events:none}
+.wall-header,.wall-footer{position:absolute;z-index:2;left:max(17px,env(safe-area-inset-left));right:max(17px,env(safe-area-inset-right));display:flex;align-items:center;pointer-events:none}
+.wall-header{top:max(16px,env(safe-area-inset-top));justify-content:space-between}.wall-footer{bottom:max(20px,env(safe-area-inset-bottom));flex-direction:column;gap:11px}
+.wall-id,.wall-hint,.wall-button{color:#f7f8ee;border:1px solid #ffffff32;background:#152219e8;backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px)}
+.wall-id,.wall-button{border-radius:999px;padding:11px 17px}.wall-id{font-size:13px;letter-spacing:.02em}
+.wall-button{pointer-events:auto;cursor:pointer;font:600 14px/1.35 system-ui,-apple-system,sans-serif;min-height:44px}
+.wall-button:disabled{opacity:.52;cursor:default}.wall-place{background:#e9efdc;color:#19241a;border-color:#f0f3dc}
+.wall-controls{display:flex;gap:8px}.wall-hint{max-width:38ch;border-radius:12px;margin:0;text-align:center;padding:10px 14px;font-size:13px}
+.wall-reticle{pointer-events:none;position:absolute;width:min(44%,225px);aspect-ratio:16/9;left:50%;top:47%;transform:translate(-50%,-50%);border-radius:6px;border:1px solid #ffffff96;box-shadow:0 0 0 1px #1a271b38}
+.wall-room[data-state=ready] .wall-reticle{border:2px solid #ddeebd}.wall-room:is([data-state=placed],[data-state=loading],[data-state=error]) .wall-reticle,.wall-room[data-state=error] .wall-controls{display:none}
+
+.wall-room[data-route=webxr][data-state=error] .wall-controls{display:flex}
