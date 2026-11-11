@@ -6,11 +6,9 @@ This static site presents the 41-second Moeckel Pond film and a tabletop mill mo
 
 ## Wall film
 
-On a phone, choose **Place on wall**. Face a wall straight on, find an area with visible detail and tap where the film should go. The player decodes `assets/poster-540.mp4` as one continuous video surface at the original 960 × 540 and 24 fps. Its sound control enables the original soundtrack.
+On a Quick Look-capable iPhone or iPad running version 18 or later, **Place on wall** opens the native Apple viewer directly. Choose AR, aim at a vertical surface, and position the framed film. The USDZ uses whole images and includes the original AAC soundtrack.
 
-On supported devices, native WebXR hit tests can place the film on a vertical surface. The local camera player can also follow detail in the chosen wall using JSFeat and a planar transform. It hides the film when tracking is lost, recovers when the same features return, and releases the camera when closed.
-
-A compatible iPhone can switch to Apple wall placement if the browser cannot track the surface or access the camera. That self-contained USDZ uses a complete image for each selected moment and includes the original AAC audio. It is a smaller-resolution animated edition suitable for Apple's model viewer. The original MP4 is the normal mobile wall player.
+The [original MP4 wall player](https://wesley-d5.github.io/moeckel-pond-ar/#original-film) decodes the full 960 × 540, 24 fps film in the browser. It is also the normal phone route where the animated Quick Look edition is unsupported. WebXR can detect vertical surfaces on compatible devices. The local JSFeat tracker can follow a textured wall, recover when its features return, and release the camera on close.
 
 ## Miniature
 
@@ -35,6 +33,6 @@ python3 authoring/wall-film/build.py assets/poster-540.mp4 authoring/wall-film/g
 python3 authoring/miniature/build.py authoring/miniature/build
 ```
 
-The wall generator emits `moeckel-wall-film-whole.usdz`. Its native MaterialX playback requires iOS or iPadOS 18 or later. `#apple-wall` opens the optional native wall route on supported devices. The smaller native edition uses 279 complete 512 × 288 images over the 41.46-second original AAC track.
+The wall generator emits `moeckel-wall-film-whole.usdz`. Its native MaterialX playback requires iOS or iPadOS 18 or later. `#wall` and `#apple-wall` open the native wall route on supported devices. The smaller native edition uses 279 complete 512 × 288 images over the 41.46-second original AAC track.
 
 The miniature generator emits `moeckel-pond-miniature.usdz` and `pond.glb`. The site serves them at `models/moeckel-mill.usdz` and `preview/mill-study.glb`. The modeled façade, roof and masonry textures use perspective-corrected crops of the source photograph.

@@ -10,8 +10,7 @@ const phone =
   (navigator.maxTouchPoints > 0 && matchMedia("(pointer:coarse)").matches);
 const android = /Android/i.test(navigator.userAgent);
 const quickLook = byId("native-launch").relList?.supports?.("ar") === true;
-// The high-quality web route needs no Apple shader support. The optional native movie
-// uses MaterialX, introduced in Quick Look on iOS/iPadOS 18.
+// The animated wall film needs MaterialX support in Quick Look (iOS/iPadOS 18+).
 const appleVersion =
   navigator.userAgent.match(/(?:iPhone OS |CPU OS )(\d+)/) ||
   navigator.userAgent.match(/Version\/(\d+)/);
@@ -38,11 +37,9 @@ function publicAsset(path) {
 }
 
 function directAppleLaunch() {
-  if (!quickLook) return false;
-  return (
-    experience === "miniature" ||
-    (nativeFilm && (location.hash === "#apple-wall" || !cameraAllowed))
-  );
+  if (experience === "miniature") return quickLook;
+  const browserFilmRequested = location.hash === "#original-film" && cameraAllowed;
+  return nativeFilm && !browserFilmRequested;
 }
 
 function configureLaunch() {
