@@ -113,7 +113,7 @@ export function startPatchWall({ stage, video, onStatus, onError }) {
     const picked = rectAt(tracker.w, tracker.h, x * tracker.w, y * tracker.h);
     if (!tracker.capture(picked)) {
       onStatus(
-        "searching",
+        "untextured",
         "Choose an area with more detail, such as wood grain, brick or a wall hanging.",
       );
       return false;

@@ -1,510 +1,465 @@
-"""Generate the Season Mill. Run with Python 3, Pillow and the OpenUSD command line tools."""
+"""Reconstruct Moeckel Pond's mill and banks from the supplied spring reference.
+
+The image correspondences below are in the 1280 x 720 reference view. Only
+isolated surfaces supply texture images. Roofs, masonry, branches, piers,
+channels and both banks are independently modeled and visible from all sides.
+Requires Python 3, NumPy, Pillow, and macOS OpenUSD command-line tools.
+"""
 from pathlib import Path
-from math import sin, cos, pi, sqrt, exp
-import json
-import random
-import subprocess
-from PIL import Image, ImageEnhance, ImageOps, ImageDraw, ImageFont
+from collections import defaultdict
+import math, random, json, subprocess, sys, shutil
+import numpy as np
+from PIL import Image, ImageFilter
 
 HERE=Path(__file__).resolve().parent
-INPUTS, TEXTURES=HERE/'inputs', HERE/'textures'
-SEASONS=('spring','summer','autumn','winter')
-random.seed(2607)
-TEXTURES.mkdir(exist_ok=True)
-materials={}
-nodes=[]
-duration=40
-TAU=2*pi
-
-def lin(v):
-    x=v/255
-    return x/12.92 if x<=.04045 else ((x+.055)/1.055)**2.4
-
-def color(name,hexcolor,rough=.75,metal=0):
-    rgb=[lin(int(hexcolor[i:i+2],16)) for i in (0,2,4)]
-    materials[name]=dict(color=rgb,roughness=rough,metallic=metal)
-
-def textured(name,filename,rough=.85):
-    materials[name]=dict(color=[1,1,1],roughness=rough,metallic=0,texture='textures/'+filename)
-
-def prep_textures():
-    ref=Image.open(INPUTS/'spring.webp').convert('RGB')
-    def region(box):
-        return ref.crop(tuple(round(v*k/800) for v,k in zip(box,[ref.width,ref.width,ref.width,ref.width])))
-    def mirror_crop(name,box,size,saturation=1,brightness=1):
-        crop=region(box)
-        crop=ImageEnhance.Color(crop).enhance(saturation)
-        crop=ImageEnhance.Brightness(crop).enhance(brightness)
-        crop=crop.resize((size[0]//2,size[1]//2),Image.Resampling.LANCZOS)
-        h=Image.new('RGB',(size[0],size[1]//2))
-        h.paste(crop,(0,0));h.paste(ImageOps.mirror(crop),(crop.width,0))
-        out=Image.new('RGB',size)
-        out.paste(h,(0,0));out.paste(ImageOps.flip(h),(0,h.height))
-        out.save(TEXTURES/(name+'.jpg'),quality=94)
-        return out
-    side=mirror_crop('weatherboard',(548,132,700,218),(640,360),.82,1.26)
-    mirror_crop('shingles',(305,122,394,147),(512,168),.8,.96)
-    mirror_crop('fieldstone',(8,252,133,287),(620,172),.75,1.13)
-    water=mirror_crop('pond-resin',(12,344,102,425),(420,390),.85,1.05)
-    water=ImageOps.colorize(ImageOps.grayscale(water),'#284c4a','#93b0a2')
-    water.save(TEXTURES/'pond-resin.jpg',quality=94)
-    grain=ImageOps.colorize(ImageOps.grayscale(side),'#39241b','#9e6950')
-    grain.save(TEXTURES/'walnut.jpg',quality=94)
-    for season in SEASONS:
-        image=Image.open(INPUTS/f'{season}.webp').convert('RGB')
-        # The tall central horizontal band retains the mill, skyline and water.
-        crop=image.crop((0,round(image.height*.17),image.width,round(image.height*.82)))
-        crop.save(TEXTURES/f'{season}.jpg',quality=94)
-        label=Image.new('RGB',(544,76),'#352d25')
-        draw=ImageDraw.Draw(label)
-        face=ImageFont.load_default(size=37)
-        text=season.upper()
-        widths=[draw.textlength(c,font=face) for c in text]
-        space=8
-        x=(label.width-sum(widths)-space*(len(text)-1))/2
-        for c,w in zip(text,widths):
-            draw.text((x,39),c,font=face,anchor='lm',fill='#e6d7ab',stroke_width=0)
-            x+=w+space
-        label.save(TEXTURES/f'{season}-name.jpg',quality=94)
-
-def node(name,parent=None,translation=None,rotation=None,mesh=None,animation=None):
-    data={'name':name}
-    for key,value in [('parent',parent),('translation',translation),('rotation',rotation),('mesh',mesh),('animation',animation)]:
-        if value is not None:data[key]=value
-    nodes.append(data)
+OUT=Path(sys.argv[1]).resolve() if len(sys.argv)>1 else HERE.parent/'build'
+OUT.mkdir(parents=True,exist_ok=True)
+TEX=OUT/'textures';TEX.mkdir(exist_ok=True)
+rng=random.Random(3906)
+reference=Image.open(HERE/'inputs/reference.jpg').convert('RGB')
+mat={};batches={};ROOT='MoeckelMill';MOVING='PondRipples'
+def material(name, rgb=None, texture=None, rough=.86,metal=0):
+    rgb=rgb or (255,255,255)
+    linear=lambda x: x/3294.6 if x<=10 else ((x/255+.055)/1.055)**2.4
+    mat[name]={'color':[linear(v) for v in rgb],'roughness':rough,'metallic':metal}
+    if texture:mat[name]['texture']='textures/'+texture
     return name
 
-def mesh(name,parent,mat,pts,idx,uv=None,double=False):
-    payload={'material':mat,'points':[[round(a,7) for a in v] for v in pts],'indices':idx}
-    if uv is not None:payload['uvs']=[[round(a,7) for a in v] for v in uv]
-    if double:payload['doubleSided']=True
-    return node(name,parent,mesh=payload)
+def rectified(name,quad,size):
+    # Project a photographed plane into a rectilinear UV image.
+    w,h=size;dst=[(0,0),(w,0),(w,h),(0,h)]
+    A=[];B=[]
+    for (x,y),(u,v) in zip(dst,quad):
+        u*=reference.width/1280;v*=reference.height/720
+        A.extend([[x,y,1,0,0,0,-u*x,-u*y],[0,0,0,x,y,1,-v*x,-v*y]]);B.extend([u,v])
+    coeff=np.linalg.solve(A,B)
+    result=reference.transform(size,Image.Transform.PERSPECTIVE,coeff,Image.Resampling.BICUBIC)
+    result.save(TEX/(name+'.jpg'),quality=94,subsampling=0)
+    return material(name,texture=name+'.jpg')
 
-def quads(name,parent,mat,faces,uvscale=(1,1)):
-    pts=[];uv=[];idx=[]
-    for face in faces:
-        i=len(pts);pts.extend(face)
-        if len(face)==4:
-            uv.extend([(0,0),(uvscale[0],0),uvscale,(0,uvscale[1])])
-            idx.extend([i,i+1,i+2,i,i+2,i+3])
-        else:
-            uv.extend([(0,0),(uvscale[0],0),(.5,uvscale[1])])
-            idx.extend([i,i+1,i+2])
-    return mesh(name,parent,mat,pts,idx,uv if 'texture' in materials[mat] else None)
+def crop(name,box,size=None):
+    b=[round(v*reference.width/1280) for v in box];im=reference.crop(b)
+    if size:im=im.resize(size,Image.Resampling.LANCZOS)
+    im.save(TEX/(name+'.jpg'),quality=95,subsampling=0)
+    return material(name,texture=name+'.jpg')
 
-def box(name,parent,mat,c,d,uvscale=(1,1)):
-    x,y,z=c;w,h,l=(a/2 for a in d)
-    p=[(x+ix*w,y+iy*h,z+iz*l) for ix,iy,iz in [(-1,-1,1),(1,-1,1),(1,1,1),(-1,1,1),(1,-1,-1),(-1,-1,-1),(-1,1,-1),(1,1,-1)]]
-    faces=[(0,1,2,3),(4,5,6,7),(1,4,7,2),(5,0,3,6),(3,2,7,6),(5,4,1,0)]
-    return quads(name,parent,mat,[tuple(p[i] for i in face) for face in faces],uvscale)
+rectified('LongElevation',[(286,254),(737,261),(737,378),(287,379)],(1100,255))
+rectified('GableElevation',[(858,79),(1156,86),(1156,388),(858,385)],(770,760))
+rectified('GableReturn',[(744,251),(851,189),(851,384),(744,378)],(620,470))
+rectified('BroadRoof',[(273,180),(701,197),(737,254),(282,244)],(1050,270))
+# The photographed flue is replaced with shingle pixels before its 3D geometry is added.
+im=Image.open(TEX/'BroadRoof.jpg')
+a=np.array(im);a[:,345:536]=a[:,82:273]
+Image.fromarray(a).save(TEX/'BroadRoof.jpg',quality=94,subsampling=0)
+crop('BackBoards',(914,219,1111,357),(512,350))
+crop('RoofSlates',(292,188,416,236),(460,180))
+crop('StoneSurface',(18,410,189,466),(480,150))
+crop('CellarWood',(292,382,367,434),(220,150))
+rectified('MasonryLeft',[(11,402),(237,403),(237,464),(11,474)],(600,180))
+for name,color,rough in [
+ ('Plinth',(62,64,56),.76),('Bevel',(79,79,69),.73),('DeepWood',(34,31,25),.94),
+ ('OldTimber',(76,70,57),.86),('EdgeWood',(104,98,81),.87),('Void',(21,23,18),1),
+ ('Mortar',(50,53,44),.96),('Chimney',(99,80,61),.91),('FlueCap',(78,67,54),.94),
+ ('BankDark',(68,72,41),.96),('BankGrass',(110,121,63),.94),
+ ('FlowerWhite',(209,205,170),.87),('FlowerGold',(201,179,63),.88),('FlowerLilac',(164,137,144),.88),
+ ('Bark',(82,75,52),.96),('Twig',(93,91,61),.94),('Reed',(102,106,51),.95),
+ ('ReedLight',(137,140,72),.95),('ReedShade',(73,84,45),.95),('Glint',(116,133,113),.39)
+]:material(name,color,rough=rough)
+for i,col in enumerate([(80,93,45),(105,117,63),(120,133,71),(151,157,86),(164,166,99),(96,106,58),(136,149,83)]):
+    material('Leaf'+str(i),col,rough=.92)
+for i,col in enumerate([(110,103,80),(145,126,112),(157,125,137),(176,139,154),(133,111,123),(151,145,104)]):
+    material('Blossom'+str(i),col,rough=.91)
+for i,col in enumerate([(80,81,65),(100,99,80),(117,111,89),(124,117,97),(91,92,78),(112,111,94),(135,125,102)]):
+    material('Stone'+str(i),col,rough=.97)
 
-def cyl(name,parent,mat,y0,y1,r0,r1=None,n=64,x=0,z=0):
-    if r1 is None:r1=r0
-    # +Z is front and points progress counterclockwise when viewed above.
-    low=[(x+r0*sin(i*TAU/n),y0,z+r0*cos(i*TAU/n)) for i in range(n)]
-    upper=[(x+r1*sin(i*TAU/n),y1,z+r1*cos(i*TAU/n)) for i in range(n)]
-    faces=[]
+def poly(points,m,uv=None,double=False,group=ROOT,normals=None):
+    key=(group,m,double)
+    d=batches.setdefault(key,{'material':m,'points':[],'indices':[]})
+    n=len(d['points']);d['points'].extend(points)
+    for i in range(1,len(points)-1):d['indices'].extend([n,n+i,n+i+1])
+    if 'texture' in mat[m]:
+        d.setdefault('uvs',[]).extend(uv or ([(0,0),(1,0),(1,1),(0,1)] if len(points)==4 else [(0,0),(1,0),(.5,1)]))
+    if double:d['doubleSided']=True
+    if normals is not None:d.setdefault('normals',[]).extend(normals)
+
+def box(x0,x1,y0,y1,z0,z1,m):
+    p=[(x0,y0,z1),(x1,y0,z1),(x1,y1,z1),(x0,y1,z1),
+       (x1,y0,z0),(x0,y0,z0),(x0,y1,z0),(x1,y1,z0)]
+    for idx in [(0,1,2,3),(4,5,6,7),(1,4,7,2),(5,0,3,6),(3,2,7,6),(5,4,1,0)]:
+        poly([p[i] for i in idx],m)
+
+def beam(a,b,r0,r1,m,n=7):
+    a=np.array(a);b=np.array(b);axis=b-a;axis/=np.linalg.norm(axis)
+    ref=np.array([0.,1.,0.]) if abs(axis[1])<.94 else np.array([1.,0.,0.])
+    tangent=np.cross(axis,ref);tangent/=np.linalg.norm(tangent);bitangent=np.cross(axis,tangent)
+    rims=[]
+    for c,r in [(a,r0),(b,r1)]:
+        rims.append([c+r*(math.cos(i*math.tau/n)*tangent+math.sin(i*math.tau/n)*bitangent) for i in range(n)])
     for i in range(n):
-        j=(i+1)%n
-        faces.extend([(low[i],low[j],upper[j],upper[i]),((x,y1,z),upper[i],upper[j]),((x,y0,z),low[j],low[i])])
-    return quads(name,parent,mat,faces)
+        j=(i+1)%n;poly([rims[0][i],rims[0][j],rims[1][j],rims[1][i]],m)
+    poly(list(reversed(rims[0])),m);poly(rims[1],m)
 
-def beveled(name,parent,mat,w,d,profiles,corner=.012):
-    rings=[]
-    for y,inset in profiles:
-        x=w/2-inset;z=d/2-inset;b=corner
-        rings.append([(-x+b,y,z),(x-b,y,z),(x,y,z-b),(x,y,-z+b),(x-b,y,-z),(-x+b,y,-z),(-x,y,-z+b),(-x,y,z-b)])
-    faces=[]
-    for k in range(len(rings)-1):
-        for i in range(8):
-            j=(i+1)%8;faces.append((rings[k][i],rings[k][j],rings[k+1][j],rings[k+1][i]))
-    for i in range(8):
-        j=(i+1)%8
-        faces.extend([((0,profiles[-1][0],0),rings[-1][i],rings[-1][j]),((0,profiles[0][0],0),rings[0][j],rings[0][i])])
-    return quads(name,parent,mat,faces)
-
-def frontplate(name,parent,mat,w,h,y,z):
-    return quads(name,parent,mat,[[(-w/2,y-h/2,z),(w/2,y-h/2,z),(w/2,y+h/2,z),(-w/2,y+h/2,z)]])
-
-def spinning(axis,angles,times=None):
-    return {'axis':axis,'times':times if times is not None else [i*duration/(len(angles)-1) for i in range(len(angles))],'angles':angles}
-
-def carve_relief(season,parent):
-    full=Image.open(INPUTS/(season+'-depth.webp')).convert('L')
-    depth=full.crop((0,round(full.height*.17),full.width,round(full.height*.82)))
-    nx,ny=72,20
-    data=depth.resize((nx+1,ny+1),Image.Resampling.BILINEAR)
-    points=[];uv=[];indices=[]
-    for y in range(ny+1):
-        v=y/ny
-        for x in range(nx+1):
-            u=x/nx
-            # The height field sits just behind the front brass bezel.
-            d=data.getpixel((x,ny-y))/255
-            points.append(((u-.5)*.168,.0495+(v-.5)*.0461,.11025+.0027*d))
-            uv.append((u,v))
-    for y in range(ny):
-        for x in range(nx):
-            a=y*(nx+1)+x; b=a+1;c=b+nx+1;d=a+nx+1
-            indices.extend((a,b,c,a,c,d))
-    mesh(season.title()+'Relief',parent,season,points,indices,uv)
-
-def roof(name,parent,cx,cz,w,d,walltop,rise):
-    # Local roof ridge runs along Z, broad end gable faces +Z.
-    e=.0025; half=w/2+e;lo=walltop;hi=walltop+rise;z0=cz+d/2+e;z1=cz-d/2-e
-    front=[(cx-w/2,lo,cz+d/2),(cx+w/2,lo,cz+d/2),(cx,hi,cz+d/2)]
-    back=[(cx+w/2,lo,cz-d/2),(cx-w/2,lo,cz-d/2),(cx,hi,cz-d/2)]
-    quads(name+'Gables',parent,'Timber',[front,back])
-    # Duplicate reversed underside as a physical eave with wooden colored fascia.
-    quads(name+'Shingles',parent,'Shingle',[
-       [(cx-half,lo,z0),(cx,hi,z0),(cx,hi,z1),(cx-half,lo,z1)],
-       [(cx,hi,z0),(cx+half,lo,z0),(cx+half,lo,z1),(cx,hi,z1)]],(2,1.7))
-    for j,z in enumerate((z0,z1)):
-        for k,sign in enumerate((-1,1)):
-            a=(cx+sign*half,lo,z);b=(cx,hi,z)
-            beam(name+f'Fascia{j}{k}',parent,'RoofRim',a,b,.0016)
-    beam(name+'Ridge',parent,'RoofRim',(cx,hi,z0),(cx,hi,z1),.0015)
-
-def beam(name,parent,mat,start,end,r):
-    import math
-    a=start;b=end
-    direction=[b[i]-a[i] for i in range(3)]
-    length=math.sqrt(sum(v*v for v in direction))
-    n=[v/length for v in direction]
-    temp=(1,0,0) if abs(n[0])<.9 else (0,0,1)
-    def cross(u,v): return [u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]]
-    u=cross(n,temp);scale=math.sqrt(sum(v*v for v in u));u=[v/scale for v in u];v=cross(n,u)
-    ends=[[[c[j]+r*(u[j]*cos(i*TAU/6)+v[j]*sin(i*TAU/6)) for j in range(3)] for i in range(6)] for c in (a,b)]
-    faces=[]
-    for i in range(6):
-        j=(i+1)%6
-        faces.extend([(ends[0][i],ends[0][j],ends[1][j],ends[1][i]),(a,ends[0][j],ends[0][i]),(b,ends[1][i],ends[1][j])])
-    return quads(name,parent,mat,faces)
-
-def ring_z(name,parent,mat,r0,r1,z,thickness,n=36):
-    rings=[[(r*sin(i*TAU/n),r*cos(i*TAU/n),h) for i in range(n)] for r,h in [(r0,z),(r1,z),(r1,z+thickness),(r0,z+thickness)]]
-    faces=[]
+# Low object base. Side faces contain only a single solid material.
+XL,XR,ZB,ZF=-.304,.363,-.652,-.148
+def ring(x0,x1,z0,z1,r,y):
+    out=[]
+    for cx,cz,start in [(x1-r,z1-r,0),(x0+r,z1-r,90),(x0+r,z0+r,180),(x1-r,z0+r,270)]:
+        for a in np.linspace(start,start+90,8):
+            t=math.radians(a);out.append((cx+math.cos(t)*r,y,cz+math.sin(t)*r))
+    return out
+# This pond cutaway is wider along its far bank and tapers around the foreground
+# island, letting the camera approach the water without cutting off the base.
+outline=np.array([[-.274,-.616],[-.124,-.635],[.178,-.636],[.314,-.609],[.349,-.530],
+ [.371,-.391],[.331,-.318],[.239,-.255],[.175,-.182],[.145,-.134],[.105,-.104],
+ [.042,-.103],[-.026,-.115],[-.081,-.162],[-.161,-.239],[-.232,-.326],
+ [-.286,-.420],[-.299,-.504],[-.289,-.580]])
+def footprint(y,inset):
+    # Clockwise in XZ as seen on paper; side and top faces use explicit winding.
+    p=[];n=len(outline);centre=np.array([.025,-.401])
     for i in range(n):
-        j=(i+1)%n
-        for k in range(4):
-            l=(k+1)%4
-            faces.append((rings[k][j],rings[k][i],rings[l][i],rings[l][j]))
-    return quads(name,parent,mat,faces)
+        a,b,c,d=(outline[(i+j)%n] for j in [-1,0,1,2])
+        for t in np.linspace(0.,1.,7,endpoint=False):
+            xz=.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t*t+(-a+3*b-3*c+d)*t**3)
+            xz=centre+(xz-centre)*(1-inset)
+            p.append((xz[0],y,xz[1]))
+    return p
+r0=footprint(-.011,.006);r1=footprint(-.008,0);r2=footprint(.001,0);r3=footprint(.003,.004)
+for lower,upper,m in [(r0,r1,'Bevel'),(r1,r2,'Plinth'),(r2,r3,'Bevel')]:
+    for i in range(len(lower)):
+        j=(i+1)%len(lower);poly([lower[j],lower[i],upper[i],upper[j]],m)
+poly(r0,'Plinth')
+# Water albedo creates a shaded channel under the buildings. Entirely procedural; no photograph on the plinth.
+N=720;xx,zz=np.meshgrid(np.linspace(XL,XR,N),np.linspace(ZB,ZF,N))
+noise=np.random.default_rng(21).random((N,N))
+def mist(cx,cz,ax,az):return np.exp(-((xx-cx)/ax)**4-((zz-cz)/az)**2)
+wave=np.sin(zz*1020+np.sin(xx*71)*3+np.sin(xx*137+zz*88))*.5+np.sin(zz*1734+xx*63)*.23
+channel=mist(.192,-.315,.087,.097)*.79+mist(-.005,-.477,.136,.06)*.54
+warm=mist(-.215,-.46,.079,.13)+.7*mist(.316,-.372,.06,.09)
+refl=.5+.5*np.sin(xx*288+np.sin(zz*160)*1.5)
+base=np.array([67.,87.,80.]);rgb=np.broadcast_to(base,(N,N,3)).copy()
+rgb += (wave*5+(noise-.5)*3+refl*5)[:,:,None]
+rgb *= (1-np.minimum(.85,channel)*.68)[:,:,None]
+rgb += warm[:,:,None]*np.array([7.,5.,-7.])
+Image.fromarray(np.uint8(np.clip(rgb,0,255))).save(TEX/'Water.jpg',quality=94)
+material('PondWater',texture='Water.jpg',rough=.39,metal=.16)
+water=list(reversed(r3));poly(water,'PondWater',[((x-XL)/(XR-XL),1-(z-ZB)/(ZF-ZB)) for x,y,z in water])
+# Animating fine, broken reflections keeps the building stationary.
+def within_water(x,z):
+    # All vertices of the wavelet must remain over the pond at each animation extremum.
+    inside=False
+    for i,p in enumerate(r3):
+        q=r3[(i+1)%len(r3)]
+        if (p[2]>z)!=(q[2]>z):
+            if x<(q[0]-p[0])*(z-p[2])/(q[2]-p[2])+p[0]:inside=not inside
+    return inside
+for i in range(85):
+    x=rng.uniform(XL+.026,XR-.026);z=rng.uniform(-.48,ZF-.018)
+    if not all(within_water(x+dx,z+dz) for dx in [-.016,.016] for dz in [-.004,.004]):continue
+    length=rng.uniform(.003,.012);y=.00328
+    p=[(x-length,y,z),(x-length*.22,y+.00007,z-.00021),(x+length,y,z+.00013),(x,y,z+.00023)]
+    poly(p,'Glint',double=True,group=MOVING)
 
-def tree(name,parent,x,z,y,scale,palette):
-    # Contiguous faceted canopy clumps and branching trunks mimic a carved museum model.
-    matleaf='PaperBirch' if palette==3 else 'Bark'
-    treeparent=node(name,parent,[x,y,z])
-    crown=[(-.009,.029,.004),(.008,.031,.004),(-.003,.041,-.003),(.003,.048,.001),(.013,.036,-.006),(-.012,.034,-.004)]
-    def pt(p):return tuple(v*scale for v in p)
-    beam('Trunk'+name,treeparent,matleaf,pt((0,0,0)),pt((.001,.045,0)),.0017*scale)
-    for i,(xv,yv,zv) in enumerate(crown):
-        end=pt((xv,yv,zv))
-        mid=pt((xv*.46,yv*.8,zv*.46))
-        beam('Branch'+name+str(i),treeparent,matleaf,pt((0,.016+i*.0014,0)),mid,.0009*scale)
-        beam('Twig'+name+str(i),treeparent,matleaf,mid,end,.00059*scale)
-        if palette==3:
-            beam('Fine'+name+str(i),treeparent,matleaf,mid,pt((xv*1.15,yv+.006,zv+.003)),.00037*scale)
-        else:
-            leafy('Crown'+name+str(i),treeparent,f'Foliage{palette}{i%3}',end,pt((.0105,.014,.011)),i)
-
-def leafy(name,parent,material,c,r,seed):
-    points=[];idx=[]
-    n=9; rows=5
-    rng=random.Random(68+seed)
-    for row in range(rows+1):
-        t=row*pi/rows
-        for i in range(n):
-            a=(i+(.5 if row%2 else 0))*TAU/n; noise=.86+.22*rng.random()
-            if row==0 or row==rows:noise=1
-            points.append((c[0]+r[0]*sin(t)*cos(a)*noise,c[1]+r[1]*cos(t)*noise,c[2]+r[2]*sin(t)*sin(a)*noise))
-    for row in range(rows):
-        for i in range(n):
-            a=row*n+i;b=row*n+(i+1)%n;c1=b+n;d=a+n
-            if row<rows-1:idx.extend([a,c1,d])
-            if row>0:idx.extend([a,b,c1])
-    return mesh(name,parent,material,points,idx)
-
-def make_scene():
-    for name,hexcolor,rough,metal in [
-        ('Bronze','a78748',.32,.68),('GoldEdge','d5bd85',.31,.63),
-        ('Soot','2e3230',.50,.24),('RoofRim','4a4740',.79,0),('Beams','514535',.81,0),
-        ('Sash','a49d89',.63,0),('Glass','344a4a',.26,.27),('Mullions','756b59',.65,0),
-        ('Bark','645644',.88,0),('PaperBirch','a19d8e',.90,0),
-        ('Water','416e69',.23,.30),('Ripple','71948a',.32,.19),
-        ('Land','61725a',.89,0),('Grass','718761',.89,0),('Shore','82816b',.92,0),
-        ('SpringFlower','d4bd78',.73,0),('Weathered','73624d',.75,0),('Brick','8c6a56',.85,0),
-        ('Snow','dfdfd1',.83,0),('Stone','777568',.89,0)]:
-        color(name,hexcolor,rough,metal)
-    for si,cols in enumerate([('90a165','9baa6c','aab581'),('70895f','829764','566d53'),('bd7841','aa6036','c79754')]):
-        for k,v in enumerate(cols):color(f'Foliage{si}{k}',v,.89)
-    for name,file in [('Timber','weatherboard.jpg'),('Shingle','shingles.jpg'),('Masonry','fieldstone.jpg'),('Walnut','walnut.jpg')]:
-        textured(name,file)
-    textured('PondResin','pond-resin.jpg',.61)
-    materials['PondResin']['metallic']=.035
-    for season in SEASONS:
-        textured(season,season+'.jpg');textured(season+'Name',season+'-name.jpg')
-    base=node('SeasonMill')
-    cyl('FootShadow',base,'Soot',0,.003,.150,.154,96)
-    cyl('FootBronze',base,'Bronze',.003,.005,.155,.158,96)
-    cyl('FootWalnut',base,'Walnut',.005,.012,.158,.158,96)
-    cyl('FootGoldLine',base,'GoldEdge',.012,.0135,.158,.158,96)
-    cyl('TurntableBevel',base,'Walnut',.0135,.018,.158,.153,96)
-    cyl('Bearing',base,'Soot',.018,.020,.119,.119,72)
-    times=[0];angles=[0]
-    # Long view of each face, followed by an eased mechanical quarter turn.
-    for quadrant in range(4):
-        for local in (5,5.5,6,6.5,7,7.5,8,8.5,9,9.5,10):
-            t=max(0,min(1,(local-5)/5));f=t*t*(3-2*t)
-            times.append(10*quadrant+local);angles.append(-90*(quadrant+f))
-    rotor=node('SeasonTurntable',base,animation=spinning('Y',angles,times))
-    beveled('BronzeSkirt',rotor,'Bronze',.220,.220,[(.019,.002),(.021,0),(.023,0)])
-    beveled('WalnutCabinet',rotor,'Walnut',.218,.218,[(.022,.002),(.024,0),(.078,0),(.081,.002)])
-    beveled('TopInlay',rotor,'GoldEdge',.219,.219,[(.0778,.001),(.079,0),(.0805,0)])
-    beveled('CabinetCrown',rotor,'Walnut',.223,.223,[(.0804,.002),(.0825,0),(.0865,.002)])
-    for i,s in enumerate(SEASONS):
-        face=node(s.title()+'Window',rotor,rotation=[0,90*i,0])
-        box(s.title()+'Bezel',face,'Bronze',(0,.0495,.10945),(.172,.049,.0012))
-        carve_relief(s,face)
-        for sign in [-1,1]:
-            box(s.title()+('L' if sign<0 else 'R')+'Bead',face,'GoldEdge',(sign*.0842,.0495,.11324),(.0011,.0474,.00075))
-            box(s.title()+('Bottom' if sign<0 else 'Top')+'Bead',face,'GoldEdge',(0,.0495+sign*.0233,.11324),(.1696,.001,.00075))
-        box(s.title()+'NamePlate',face,'Bronze',(0,.02385,.1102),(.047,.0076,.0023))
-        frontplate(s.title()+'Lettering',face,s+'Name',.045,.00628,.02385,.11138)
-    beveled('PondSurface',rotor,'Water',.214,.214,[(.085,.001),(.087,0)],.010)
-    # A continuous UV projection across the carved resin keeps the painted wave texture aligned.
-    n=60
-    pts=[];uv=[];ids=[]
-    for iz in range(n+1):
-        v=iz/n
-        z=(v-.5)*.212
-        for ix in range(n+1):
-            u=ix/n;x=(u-.5)*.212
-            y=.08733+.00010*sin(z*850+x*85+sin(x*100)*.9)+.000045*sin(z*470-x*177)
-            pts.append([x,y,z]);uv.append([u*1.8,(1-v)*2.1])
-    for iz in range(n):
-        for ix in range(n):
-            a=iz*(n+1)+ix;b=a+1;c=b+n+1;d=a+n+1
-            if max(abs(pts[i][0])+abs(pts[i][2]) for i in [a,b,c,d])>.199:continue
-            ids.extend([a,c,b,a,d,c])
-    mesh('ReservoirWater',rotor,'PondResin',pts,ids,uv)
-    # Earth rises behind the mill and tapers into two islands at the millrace.
-    nx,nz=40,42
-    pts=[];ids=[]
-    for iz in range(nz+1):
-        z=-.102+.204*iz/nz
-        for ix in range(nx+1):
-            x=-.102+.204*ix/nx
-            mainz=-.014+.016*sin(x*35)+.004*cos(x*215)
-            back=.087+max(0,min(.0125,(mainz-z)*.31))
-            islet=.0878+.0035*exp(-((z-.053+x*.29)/.0085)**2)*exp(-((x+.01)/.071)**4)
-            mound=back if z<mainz else islet if islet>.088 else .085
-            if mound>.088:mound+=.0007*sin(x*200)*cos(z*160)
-            pts.append([x,mound,z])
-    for iz in range(nz):
-        for ix in range(nx):
-            a=iz*(nx+1)+ix;b=a+1;c=b+nx+1;d=a+nx+1
-            x,z=pts[a][0],pts[a][2]
-            if abs(x)+abs(z)>.198 or max(pts[i][1] for i in [a,b,c,d])<.0876:continue
-            ids.extend([a,c,b,a,d,c])
-    mesh('MillGround',rotor,'Grass',pts,ids)
-    # A narrow green resin bank at front breaks the pond reflection as in the print.
-    for i in range(24):
-        x=-.077+i*.0064
-        z=.053-x*.29+.0017*sin(i*2)
-        r=.0008+.0009*(.5+.5*sin(i*7))
-        leafy('BankRush'+str(i),rotor,'Grass',(x,.091,z),(r*1.1,r*1.4,r),i)
-        if i%3==0:leafy('Blossom'+str(i),rotor,'SpringFlower',(x,.093,z),(r*.48,r*.47,r*.48),i)
-    # Short, low glints in the resin show a water surface between the masonry piers.
-    for i in range(23):
-        x=random.uniform(-.084,.084);z=random.uniform(.021,.097)
-        if abs(z-.053+x*.29)<.010 or (.002<x<.070 and z<.05):continue
-        beam('Waterline'+str(i),rotor,'Ripple',(x,.08715,z),(x+random.uniform(.003,.010),.08715,z-.0006),.00017)
-    # Gabled mill with side wing. Materials are cut from the original Moeckel Pond artwork.
-    main=node('GableMill',rotor,[.035,0,-.008])
-    wing=node('MillWing',rotor,[-.031,0,-.018],[0,90,0])
-    def building(parent,width,length,base_y,top,rise):
-        spanw=width/2;spanl=length/2
-        for ix in [-1,1]:
-            for iz in [-1,0,1]:
-                x=ix*(spanw-.006);z=iz*(spanl-.006)
-                box('Pier'+parent+str(ix+1)+str(iz+1),parent,'Masonry',(x,(base_y+.0868)/2,z),(.0115,base_y-.0868,.012),(1.2,1.2))
-        box(parent+'Floor',parent,'Beams',(0,base_y+.0007,0),(width+.0013,.0028,length+.0013))
-        box(parent+'Walls',parent,'Timber',(0,(base_y+top)/2,0),(width,top-base_y,length),(1.50,1.35))
-        roof(parent+'Roof',parent,0,0,width,length,top,rise)
-        for sign in [-1,1]:
-            box(parent+('Left' if sign<0 else 'Right')+'Post',parent,'Sash',(sign*(spanw-.0013),(base_y+top)/2,spanl+.0005),(.0019,top-base_y,.0012))
-        # Windows form a row on both long walls under the eaves.
-        for side in [-1,1]:
-            for ix,z in enumerate([-.29*length,0,.29*length]):
-                for j,y in enumerate([base_y+.36*(top-base_y),base_y+.80*(top-base_y)]):
-                    window=node(parent+f'Window{side+1}{ix}{j}',parent,[side*(spanw+.0004),y,z],[0,side*90,0])
-                    box(window+'Trim',window,'Sash',(0,0,0),(.0067,.0085,.0008))
-                    box(window+'Pane',window,'Glass',(0,0,.00046),(.0054,.00695,.00019))
-                    box(window+'Cross',window,'Mullions',(0,0,.00064),(.0054,.00045,.00016))
-        if parent==main:
-            box('MillBackDoor',parent,'Beams',(0,base_y+.006,-spanl-.00025),(.009,.014,.0009))
-        else:
-            box('WingChimney',parent,'Brick',(.004,top+rise,.009),(.0057,.009,.0061))
-            box('ChimneyCrown',parent,'RoofRim',(.004,top+rise+.0044,.009),(.0065,.0015,.0069))
-    building(main,.068,.086,.109,.1505,.024)
-    building(wing,.043,.079,.106,.143,.0145)
-    # A working wooden overshot wheel on the front of the mill wing.
-    wheel=node('WaterWheel',rotor,[-.034,.106,.014],animation=spinning('Z',[-i*45 for i in range(33)]))
-    for i,z in enumerate([.0006,.0078]):
-        ring_z('IronHoop'+str(i),wheel,'Soot',.0152,.0165,z,.0012)
-        ring_z('WheelRail'+str(i),wheel,'Weathered',.0128,.0155,z+.0004,.0014)
-    for i in range(14):
-        shaft=node('WheelBlade'+str(i),wheel,rotation=[0,0,i*360/14])
-        box('Paddle'+str(i),shaft,'Weathered',(0,.0151,.0046),(.0033,.0021,.0097))
-        if i%2==0:
-            box('Spoke'+str(i),shaft,'Beams',(0,.007,.0081),(.00115,.0126,.001))
-    hub=node('WheelAxle',wheel,rotation=[90,0,0])
-    cyl('AxleDisk',hub,'Bronze',-.001,.0098,.0029,n=16)
-    # Timber sluice and bridge.
-    box('Sluice',rotor,'Beams',(-.031,.124,.006),(.041,.0026,.006))
+# Central two-volume mill. The gable's blank front faces +Z; its long LEFT return faces -X.
+X0,X1,Z0,Z1=.124,.255,-.607,-.320
+floor,eave,ridge=.044,.128,.182;mid=(X0+X1)/2
+V=(eave-floor)/(ridge-floor)
+poly([(X0,floor,Z1),(X1,floor,Z1),(X1,eave,Z1),(mid,ridge,Z1),(X0,eave,Z1)],
+     'GableElevation',[(0,0),(1,0),(1,V),(.47,1),(0,V)])
+poly([(X1,floor,Z0),(X0,floor,Z0),(X0,eave,Z0),(mid,ridge,Z0),(X1,eave,Z0)],
+     'BackBoards',[(0,0),(1.4,0),(1.4,1.2),(.7,1.85),(0,1.2)])
+wing_front=-.472
+poly([(X0,floor,Z0),(X0,floor,wing_front),(X0,eave,wing_front),(X0,eave,Z0)],'BackBoards',[(0,0),(1.2,0),(1.2,1),(0,1)])
+poly([(X0,floor,wing_front),(X0,floor,Z1),(X0,eave,Z1),(X0,eave,wing_front)],'GableReturn')
+poly([(X1,floor,Z1),(X1,floor,Z0),(X1,eave,Z0),(X1,eave,Z1)],'BackBoards',[(0,0),(2.1,0),(2.1,1.2),(0,1.2)])
+box(X0,X1,floor-.0014,floor,Z0,Z1,'DeepWood')
+def roof(name, corners,tex):
+    poly(corners,tex)
+    under=[(x,y-.0018,z) for x,y,z in corners];poly(list(reversed(under)),'DeepWood')
     for i in range(4):
-        x=-.082+i*.0084
-        box('WalkPost'+str(i),rotor,'Beams',(x,.1077,.009),(.0018,.020,.0018))
-    box('WalkRail',rotor,'Weathered',(-.0695,.1163,.009),(.029,.00165,.0018))
-    box('WalkDeck',rotor,'Weathered',(-.0695,.109,.005),(.030,.0018,.009))
-    # Spring, summer, autumn and bare winter branches frame the four orientations.
-    for args in [
-        ('Willow',-.083,-.020,.096,.90,0),('Alder',-.078,-.049,.098,.87,0),
-        ('Maple',.082,-.034,.097,.97,1),('Beech',.069,-.076,.098,.86,1),
-        ('Copper',.027,-.081,.098,.98,2),('Oak',-.025,-.075,.098,.77,2),
-        ('Birch',-.067,-.071,.099,1.09,3),('BirchSmall',-.086,-.069,.099,.89,3)]:
-        tree(args[0],rotor,*args[1:])
-    for i in range(13):
-        x=random.uniform(-.08,.078);z=-.066+random.uniform(-.014,.006)
-        leafy('Stone'+str(i),rotor,'Stone',(x,.099,z),(.0039,.0025,.0046),i)
+        j=(i+1)%4;poly([corners[j],corners[i],under[i],under[j]],'EdgeWood')
+pad=.0035
+roof('MainLeft',[(X0-pad,eave,Z1+pad),(mid,ridge+.001,Z1+pad),(mid,ridge+.001,Z0-pad),(X0-pad,eave,Z0-pad)],'RoofSlates')
+roof('MainRight',[(mid,ridge+.001,Z1+pad),(X1+pad,eave,Z1+pad),(X1+pad,eave,Z0-pad),(mid,ridge+.001,Z0-pad)],'RoofSlates')
+# Main gable fascia and weathered corner uprights are narrow enough to preserve the photo's silhouette.
+for x in [X0,X1]:box(x-.00065,x+.00065,floor,eave,Z1,Z1+.0007,'EdgeWood')
 
-def r3(a):return '('+', '.join(f'{x:.7g}' for x in a)+')'
-def arr(a):return '['+', '.join(str(x) for x in a)+']'
-def unshade():
-    text=[]
-    for name,m in materials.items():
-        p='/SeasonMill/Materials/'+name
-        texture=m.get('texture')
-        terminal='            color3f inputs:diffuseColor.connect = <'+p+'/Albedo.outputs:rgb>' if texture else '            color3f inputs:diffuseColor = '+r3(m['color'])
-        text.append(f'''        def Material "{name}" {{
-            token outputs:surface.connect = <{p}/Finish.outputs:surface>
-            def Shader "Finish" {{
-                uniform token info:id = "UsdPreviewSurface"
-                {terminal.strip()}
-                float inputs:roughness = {m['roughness']}
-                float inputs:metallic = {m['metallic']}
-                token outputs:surface
-            }}''')
-        if texture:
-            text.append(f'''            def Shader "Coordinates" {{
-                uniform token info:id = "UsdPrimvarReader_float2"
-                string inputs:varname = "st"
-                float2 outputs:result
-            }}
-            def Shader "Albedo" {{
-                uniform token info:id = "UsdUVTexture"
-                asset inputs:file = @{texture}@
-                token inputs:sourceColorSpace = "sRGB"
-                token inputs:wrapS = "repeat"
-                token inputs:wrapT = "repeat"
-                float2 inputs:st.connect = <{p}/Coordinates.outputs:result>
-                float3 outputs:rgb
-            }}''')
-        text.append('        }')
-    return '    def Scope "Materials" {\n'+'\n'.join(text)+'\n    }'
+# Left wing runs along X with a full-width shingled roof pitched toward the viewer.
+L,R=-.126,.125;zF=wing_front;zB=-.604;zM=(zF+zB)/2
+low,high,apex=.041,.102,.137
+windows=[(.486,.528,.235,.565),(.704,.749,.230,.565),(.486,.529,.72,.982),(.704,.749,.72,.984)]
+us=sorted({0.,1.,*(v for w in windows for v in w[:2])});vs=sorted({0.,1.,*(v for w in windows for v in w[2:])})
+def frontpos(u,v,z=zF):return (L+(R-L)*u,low+(high-low)*v,z)
+def surface_panel(u0,u1,v0,v1,z,elevation):
+    uv=[(u0,v0),(u1,v0),(u1,v1),(u0,v1)]
+    poly([frontpos(u,v,z) for u,v in uv],elevation,uv)
+for ua,ub in zip(us,us[1:]):
+    for va,vb in zip(vs,vs[1:]):
+        if any(a<(ua+ub)/2<b and c<(va+vb)/2<d for a,b,c,d in windows):continue
+        surface_panel(ua,ub,va,vb,zF,'LongElevation')
+for a,b,c,d in windows:
+    recess=.0013;surface_panel(a,b,c,d,zF-recess,'LongElevation')
+    outer=[frontpos(a,c),frontpos(b,c),frontpos(b,d),frontpos(a,d)]
+    inner=[(x,y,z-recess) for x,y,z in outer]
+    for i in range(4):j=(i+1)%4;poly([outer[i],outer[j],inner[j],inner[i]],'DeepWood',double=True)
+    x0,y0,_=outer[0];x1=outer[1][0]
+    box(x0-.0006,x1+.0006,y0-.0007,y0,zF-.0003,zF+.001,'EdgeWood')
+poly([(R,low,zB),(L,low,zB),(L,high,zB),(R,high,zB)],'BackBoards',[(0,0),(2.2,0),(2.2,1),(0,1)])
+poly([(L,low,zB),(L,low,zF),(L,high,zF),(L,apex,zM),(L,high,zB)],'BackBoards',[(0,0),(1.4,0),(1.4,.7),(.7,1.1),(0,.7)])
+poly([(R,low,zF),(R,low,zB),(R,high,zB),(R,apex,zM),(R,high,zF)],'BackBoards',[(0,0),(1.4,0),(1.4,.7),(.7,1.1),(0,.7)])
+box(L,R,low-.0015,low,zB,zF,'DeepWood')
+roof('WingFront',[(L-pad,high,zF+pad),(R+pad,high,zF+pad),(R+pad,apex,zM),(L-pad,apex,zM)],'BroadRoof')
+roof('WingBack',[(R+pad,high,zB-pad),(L-pad,high,zB-pad),(L-pad,apex,zM),(R+pad,apex,zM)],'RoofSlates')
+# Small chimney visible just down from the left ridge.
+fx=L+(R-L)*.411;fz=zM+.018;fy=apex-(fz-zM)/(zF-zM)*(apex-high)
+box(fx-.0041,fx+.0041,fy-.001,fy+.0135,fz-.0036,fz+.0036,'Chimney')
+box(fx-.0048,fx+.0048,fy+.0130,fy+.015,fz-.0044,fz+.0044,'FlueCap')
+box(L,L+.051,.004,low,zB,zF,'CellarWood')
+# Dark interior surfaces at the back of actual open bays.
+box(X0+.003,X1-.003,.002,floor-.001,Z1-.071,Z1-.060,'Void')
+box(X0+.018,X0+.022,.002,floor-.001,wing_front+.003,Z1-.044,'Void')
+box(L+.048,R-.001,.002,low-.001,zF-.046,zF-.036,'Void')
+for x in [-.057,-.014,.032,.075]:
+    box(x,x+.0021,.003,low,zF-.012,zF-.009,'OldTimber')
+box(L,R,low-.004,low,zF-.002,zF+.0003,'DeepWood')
 
-def usd():
-    kids={}
-    for n in nodes:kids.setdefault(n.get('parent'),[]).append(n)
-    def emit(n,indent):
-        name=n['name'];m=n.get('mesh');kind='Mesh' if m else 'Xform'
-        meta=' (prepend apiSchemas = ["MaterialBindingAPI"])' if m else ''
-        if name=='SeasonMill':meta=' (prepend apiSchemas = ["Preliminary_AnchoringAPI"])'
-        s=[indent+f'def {kind} "{name}"'+meta+' {']
-        d=indent+'    ';ops=[]
-        if name=='SeasonMill':s.extend([d+'uniform token preliminary:anchoring:type = "plane"',d+'uniform token preliminary:planeAnchoring:alignment = "horizontal"',unshade()])
-        if n.get('translation'):
-            s.append(d+'double3 xformOp:translate = '+r3(n['translation']));ops.append('xformOp:translate')
-        if n.get('rotation'):
-            s.append(d+'float3 xformOp:rotateXYZ = '+r3(n['rotation']));ops.append('xformOp:rotateXYZ')
-        if n.get('animation'):
-            an=n['animation'];axis=an['axis'];samples=', '.join(f'{round(t*24)}: {v:.9g}' for t,v in zip(an['times'],an['angles']))
-            s.append(d+f'float xformOp:rotate{axis}.timeSamples = {{'+samples+'}');ops.append('xformOp:rotate'+axis)
-        if ops:s.append(d+'uniform token[] xformOpOrder = '+json.dumps(ops))
-        if m:
-            indices=m['indices'];s.extend([
-                d+'point3f[] points = '+arr(r3(p) for p in m['points']),
-                d+'int[] faceVertexCounts = '+arr([3]*(len(indices)//3)),
-                d+'int[] faceVertexIndices = '+arr(indices),
-                d+'uniform token subdivisionScheme = "none"',
-                d+'rel material:binding = </SeasonMill/Materials/'+m['material']+'>'])
-            if m.get('doubleSided'):s.append(d+'uniform bool doubleSided = 1')
-            if m.get('uvs'):s.append(d+'texCoord2f[] primvars:st = '+arr(r3(p) for p in m['uvs'])+' (interpolation = "vertex")')
-        for child in kids.get(name,[]):s.append(emit(child,d))
-        s.append(indent+'}')
-        return '\n'.join(s)
-    return f'''#usda 1.0
-(
-    defaultPrim = "SeasonMill"
-    metersPerUnit = 1
-    upAxis = "Y"
-    startTimeCode = 0
-    endTimeCode = {duration*24}
-    timeCodesPerSecond = 24
-    framesPerSecond = 24
-    autoPlay = true
-    playbackMode = "loop"
-)
-'''+emit(nodes[0],'')+'\n'
+# Rough, individually coursed granite supports. Each block has slight variations in face, depth and height.
+def stone_block(a,b,y0,y1,c,d,shade=None):
+    # Chamfered, uneven granite faces follow the joint courses in the source.
+    w=b-a;h=y1-y0;cut=min(w*.19,h*.27);dz=d-c
+    rim=[(a+cut,y0),(b-cut*.7,y0),(b,y0+cut*.7),(b,y1-cut),(b-cut*.8,y1),
+         (a+cut*1.35,y1),(a,y1-cut*.63),(a,y0+cut)]
+    front=[(x+rng.uniform(-.00032,.00032),y+rng.uniform(-.00046,.00046),d+rng.uniform(-.00065,.00065)) for x,y in rim]
+    back=[(x+rng.uniform(-.00045,.00045),y,c+rng.uniform(-.00045,.00045)) for x,y,z in front]
+    u,v=rng.uniform(.04,.65),rng.uniform(.035,.58);du,dv=rng.uniform(.12,.27),rng.uniform(.18,.34)
+    uv=[(u+(x-a)/w*du,v+(y-y0)/h*dv) for x,y,_ in front]
+    poly(front,'StoneSurface',uv);poly(list(reversed(back)),'StoneSurface',list(reversed(uv)))
+    for i in range(len(front)):
+        j=(i+1)%len(front)
+        poly([front[j],front[i],back[i],back[j]],'StoneSurface',[(u+du,v),(u,v),(u,v+dv),(u+du,v+dv)])
 
+def masonry(x0,x1,z0,z1,y0,y1,rows,block_width,face=None):
+    # Dark recessed mortar remains visible in joints, while the stones cast their own shadows.
+    box(x0+.001,x1-.001,y0,y1-.0002,z0+.0008,z1-.0016,'Mortar')
+    for row in range(rows):
+        a=y0+(y1-y0)*row/rows;b=y0+(y1-y0)*(row+1)/rows
+        x=x0
+        while x<x1-.0003:
+            w=min(x1-x,block_width*rng.uniform(.65,1.3)*(0.6 if row%2 and x==x0 else 1))
+            if x1-(x+w)<block_width*.32:w=x1-x
+            gap=.00026
+            depth=z0
+            while depth<z1-.00015:
+                d=min(z1-depth,rng.uniform(.0125,.021))
+                if z1-(depth+d)<.005:d=z1-depth
+                stone_block(x+gap,x+w-gap,a+.0001,b,depth+.00014,depth+d-.00014)
+                depth+=d
+            x+=w
+    # Apply the photographed granite courses to exposed side returns and the cap.
+    # Cropping by physical dimensions keeps side stones at the same scale as front masonry.
+    h=y1-y0;d=z1-z0;w=x1-x0;skim=.0011
+    vv=h/.046;ud=d/.132;uw=w/.132
+    poly([(x0-skim,y0,z0),(x0-skim,y0,z1),(x0-skim,y1,z1),(x0-skim,y1,z0)],'StoneSurface',[(.08,.02),(.08+ud,.02),(.08+ud,.02+vv),(.08,.02+vv)])
+    poly([(x1+skim,y0,z1),(x1+skim,y0,z0),(x1+skim,y1,z0),(x1+skim,y1,z1)],'StoneSurface',[(.49,.08),(.49+ud,.08),(.49+ud,.08+vv),(.49,.08+vv)])
+    poly([(x0,y1+.0008,z1),(x1,y1+.0008,z1),(x1,y1+.0008,z0),(x0,y1+.0008,z0)],'StoneSurface',[(.19,.13),(.19+uw,.13),(.19+uw,.13+d/.046),(.19,.13+d/.046)])
+    if face:
+       # Thin photo-mapped relief skin across the main outward face; no flat backing under its open channels.
+       nx,ny=34,10
+       for iy in range(ny):
+        for ix in range(nx):
+         uv=[(ix/nx,iy/ny),((ix+1)/nx,iy/ny),((ix+1)/nx,(iy+1)/ny),(ix/nx,(iy+1)/ny)]
+         def relief(u,v):return z1+.0017
+         poly([(x0+(x1-x0)*u,y0+(y1-y0)*v,relief(u,v)) for u,v in uv],face,uv)
+for i,(a,b) in enumerate([(-.018,.235),(.345,.575),(.809,1.008)]):
+    x0=X0+(X1-X0)*a;x1=X0+(X1-X0)*b
+    tex=rectified('FrontPier'+str(i),[
+      [(842,394),(915,395),(921,486),(839,489)],[(958,394),(1023,394),(1033,481),(957,484)],[(1099,394),(1155,393),(1155,471),(1105,475)]][i],(220,248))
+    masonry(x0,x1,Z1-.038,Z1-.0008,.0008,floor-.001,6,.013,tex)
+    masonry(x0,x1,Z0+.028,Z0+.061,.001,floor-.001,6,.014)
+for x in [X0-.001,X1-.018]:masonry(x,x+.020,-.451,-.422,.001,floor,5,.014)
+masonry(L+.051,L+.076,zF-.038,zF,.003,low-.001,5,.013)
+masonry(.087,.119,-.464,-.419,.002,.041,6,.013)
+masonry(.092,.122,-.471,-.438,.041,.053,2,.013)
+# Left retaining wall, fully exposed on the outside of the left wing.
+masonry(XL+.008,L-.001,-.513,-.455,.002,.033,5,.023,'MasonryLeft')
+# Short left-side walk and posts on the wing's outside corner.
+box(L-.015,L,.039,.041,-.518,-.475,'OldTimber')
+for z in [-.513,-.483]:
+    box(L-.016,L-.014,.041,.055,z-.001,z+.001,'OldTimber')
+box(L-.0165,L-.0135,.0538,.055,-.515,-.481,'EdgeWood')
 
-def batch_static_geometry():
-    # Only the wheel and turntable move. Group their fixed details by material to
-    # retain the same rendering with a small number of draws on phone GPUs.
-    source={n['name']:n for n in nodes}
-    keep={n['name'] for n in nodes if not n.get('parent') or n.get('animation')}
-    grouped={}
-    def transform(point,n):
-        x,y,z=point
-        for axis,degrees in enumerate(n.get('rotation',(0,0,0))):
-            a=degrees*pi/180;c=cos(a);s=sin(a)
-            if axis==0:y,z=y*c-z*s,y*s+z*c
-            elif axis==1:x,z=x*c+z*s,-x*s+z*c
-            else:x,y=x*c-y*s,x*s+y*c
-        dx,dy,dz=n.get('translation',(0,0,0))
-        return (x+dx,y+dy,z+dz)
-    for n in nodes:
-        m=n.get('mesh')
-        if not m:continue
-        chain=[];q=n
-        while q['name'] not in keep:
-            if q.get('rotation') or q.get('translation'):chain.append(q)
-            q=source[q['parent']]
-        parent=q['name'];mat=m['material']
-        k=(parent,mat,bool(m.get('doubleSided')))
-        g=grouped.setdefault(k,{'material':mat,'points':[],'indices':[]})
-        start=len(g['points'])
-        for p in m['points']:
-            for item in chain:p=transform(p,item)
-            g['points'].append([round(v,7) for v in p])
-        g['indices'].extend(i+start for i in m['indices'])
-        if m.get('uvs'):g.setdefault('uvs',[]).extend(m['uvs'])
-        if m.get('doubleSided'):g['doubleSided']=True
-    nodes[:]=[n for n in nodes if n['name'] in keep]
-    for (parent,mat,_),g in grouped.items():
-        suffix='Relief' if mat in SEASONS else 'Geometry'
-        node(parent+mat.title()+suffix,parent,mesh=g)
+# Waterside plants and terrain. The meadow's long axis is left/back to right/front (+X,+Z).
+def meadow(t,s):
+    a=np.array([-.166,-.436]);b=np.array([-.045,-.407]);c=np.array([.060,-.255]);d=np.array([.107,-.136])
+    xy=(1-t)**3*a+3*(1-t)**2*t*b+3*(1-t)*t*t*c+t**3*d
+    tangent=3*(1-t)**2*(b-a)+6*(1-t)*t*(c-b)+3*t*t*(d-c)
+    norm=np.array([-tangent[1],tangent[0]])/np.linalg.norm(tangent)
+    width=(max(0,math.sin(t*math.pi))**.55)*(.026+.016*t+.015*math.exp(-((t-.70)/.19)**2))*(1+.11*math.sin(t*20)+.065*math.sin(t*37))
+    xy+=norm*width*s
+    y=.00315+.0135*(1-s*s)*max(0,math.sin(t*math.pi))**.70 + .0007*math.sin(22*t+5*s)
+    return (xy[0],y,xy[1])
 
-def build():
-    prep_textures();make_scene();batch_static_geometry()
-    assert len({n['name'] for n in nodes})==len(nodes)
-    manifest={'materials':materials,'nodes':nodes,'duration':duration}
-    (HERE/'scene.json').write_text(json.dumps(manifest,separators=(',',':')))
-    (HERE/'SeasonMill.usda').write_text(usd())
-    subprocess.run(['usdcat','SeasonMill.usda','-o','SeasonMill.usdc'],cwd=HERE,check=True)
-    usdfile=HERE/'moeckel-pond-miniature.usdz'
-    subprocess.run(['usdzip',usdfile.name,'SeasonMill.usdc',*[str(p.relative_to(HERE)) for p in sorted(TEXTURES.glob('*.jpg'))]],cwd=HERE,check=True)
-    subprocess.run(['usdchecker','--arkit','--strict',str(usdfile)],check=True)
-    print('nodes:',len(nodes),'triangles:',sum(len(n['mesh']['indices'])//3 for n in nodes if n.get('mesh')),'USDZ bytes:',usdfile.stat().st_size)
-if __name__=='__main__':build()
+def shore_texture():
+    # Isolated meadow detail in the foreground of the reference, mottled across the ground.
+    raw=reference.crop((591,766,725,826)).resize((256,128),Image.Resampling.LANCZOS).convert('RGB')
+    arr=np.asarray(raw,dtype=float)
+    luminance=arr.mean(axis=2);luminance=(luminance-luminance.mean())*.32
+    n=np.random.default_rng(70).normal(0,5,luminance.shape)
+    result=np.uint8(np.clip(np.array([61,75,37])+(luminance+n)[:,:,None],0,255))
+    Image.fromarray(result).save(TEX/'MeadowGround.jpg',quality=92)
+    material('MeadowGround',texture='MeadowGround.jpg',rough=.98)
+shore_texture()
+for i in range(55):
+    t0=i/55;t1=(i+1)/55
+    for j in range(8):
+        s0=-1+j/4;s1=s0+.25
+        # Transverse (s) then longitudinal (t) winding gives +Y.
+        uv=[(t0*8,j/8),(t0*8,(j+1)/8),(t1*8,(j+1)/8),(t1*8,j/8)]
+        poly([meadow(t0,s0),meadow(t0,s1),meadow(t1,s1),meadow(t1,s0)],'MeadowGround',uv,double=True)
+def blade(x,y,z,h,m):
+    w=h*rng.uniform(.035,.095);a=rng.random()*math.tau;dx=math.cos(a)*w;dz=math.sin(a)*w
+    poly([(x-dx,y,z-dz),(x+dx,y,z+dz),(x+rng.uniform(-h*.4,h*.4),y+h,z+rng.uniform(-h*.3,h*.3))],m,double=True)
+for _ in range(3600):
+    t=rng.uniform(.013,.99);s=rng.uniform(-1,1);x,y,z=meadow(t,s)
+    blade(x,y,z,rng.uniform(.0014,.0069),rng.choice(['Reed','ReedShade','ReedLight']))
+for _ in range(925):
+    t=rng.uniform(.022,.98);s=rng.uniform(-.91,.91);x,y,z=meadow(t,s)
+    high=rng.uniform(.0022,.008);w=rng.uniform(.00042,.00093)*(1+.3*t);y+=high
+    m=rng.choices(['FlowerWhite','FlowerGold','FlowerLilac'],[.41+.25*math.sin(26*t),.41+.33*math.cos(21*t),.38+.30*math.sin(t*16)])[0]
+    bud=[(x-w,y,z),(x,y+w*.65,z+w*.62),(x+w,y,z),(x,y-w*.65,z+w*.26)]
+    petal=(x,y+w*.38,z-w*.49)
+    for k in range(4):poly([bud[k],bud[(k+1)%4],petal],m,double=True)
+    if rng.random()<.46:blade(x,y-high,z,high,'Reed')
+
+# Sculpted bank masses occupy the extreme edges and the area behind the building.
+def mound(cx,cz,rx,rz,height,material_name):
+    rings=32
+    prev=None
+    for j in range(7):
+        radius=j/6
+        cur=[]
+        for i in range(rings):
+            a=math.tau*i/rings;ruffle=1+.045*math.sin(5*a+cx*20)+.025*math.cos(9*a)
+            cur.append((cx+rx*radius*math.cos(a)*ruffle,.003+height*(1-radius**3)+.00035*math.sin(a*5)*radius,cz+rz*radius*math.sin(a)*ruffle))
+        if prev is not None:
+            for i in range(rings):
+                k=(i+1)%rings;face=[prev[i],prev[k],cur[k],cur[i]]
+                poly(face,material_name,[((v[0]-cx)*17,(v[2]-cz)*17) for v in face])
+        prev=cur
+mound(-.207,-.530,.079,.055,.031,'MeadowGround')
+mound(.312,-.384,.041,.063,.012,'MeadowGround')
+mound(-.008,-.590,.142,.033,.013,'MeadowGround')
+# The rural retaining wall spans the left shoreline. Keep the lawn behind its face.
+for i in range(270):
+    x=rng.uniform(XL+.014,L-.011);z=rng.uniform(-.513,-.466)
+    blade(x,.0327,z,rng.uniform(.0018,.0055),rng.choice(['Reed','ReedShade','ReedLight']))
+
+def leaf(x,y,z,amount,m):
+    size=amount; angle=rng.uniform(0,math.tau)
+    long=np.array([math.cos(angle),rng.uniform(-.65,.75),math.sin(angle)])*size
+    across=np.array([-math.sin(angle),rng.uniform(-.25,.30),math.cos(angle)])*size*rng.uniform(.33,.52)
+    center=np.array([x,y,z]);peak=center+np.array([0,.00024,0])
+    ends=[center-long,center+across,center+long,center-across]
+    for i in range(4):poly([ends[i],ends[(i+1)%4],peak],m,double=True)
+
+def foliage_texture(name,box,mode):
+    region=reference.crop(tuple(round(v*reference.width/1280) for v in box)).resize((256,256),Image.Resampling.LANCZOS)
+    rgb=np.asarray(region,dtype=float)
+    # Recover the canopy's fine photographic leaf pattern while removing sky holes.
+    invalid=(rgb[:,:,2]>rgb[:,:,0]*1.15)|(rgb.mean(axis=2)>196)
+    original=rgb.copy()
+    for _ in range(32):
+        if not invalid.any(): break
+        total=np.zeros_like(rgb);weights=np.zeros(invalid.shape)
+        for dy,dx in [(1,0),(-1,0),(0,1),(0,-1),(2,2),(-2,-2)]:
+            ok=np.roll(~invalid,(dy,dx),(0,1));val=np.roll(rgb,(dy,dx),(0,1))
+            total+=val*ok[:,:,None];weights+=ok
+        take=invalid&(weights>0);rgb[take]=total[take]/weights[take,None];invalid[take]=False
+    if invalid.any():rgb[invalid]=np.array([97,114,65] if mode=='leaf' else [144,118,124])
+    tone=rgb.mean(axis=2);tone=(tone-np.median(tone))*.49
+    target=np.array({'leaf':[99,117,62],'young':[132,148,91],'blossom':[151,126,135]}[mode])
+    rgb=np.uint8(np.clip(target+tone[:,:,None],0,255));Image.fromarray(rgb).save(TEX/(name+'.jpg'),quality=91)
+    material(name,texture=name+'.jpg',rough=.93)
+foliage_texture('WillowFoliage',(32,151,119,301),'leaf')
+foliage_texture('BlossomFoliage',(1230,307,1278,417),'blossom')
+foliage_texture('YoungFoliage',(1176,259,1222,356),'young')
+
+def leaf_cluster(center,width,height,m):
+    steps=10;levels=6;rings=[]
+    yaw=rng.uniform(0,math.tau)
+    for j in range(levels+1):
+        lat=-math.pi/2+j*math.pi/levels;ring=[]
+        for i in range(steps):
+            a=i*math.tau/steps+yaw;noise=rng.uniform(.76,1.16)
+            ring.append((center[0]+math.cos(a)*math.cos(lat)*width*noise,
+                         center[1]+math.sin(lat)*height*noise,
+                         center[2]+math.sin(a)*math.cos(lat)*width*noise*.82))
+        rings.append(ring)
+    for j in range(levels):
+        for i in range(steps):
+            k=(i+1)%steps
+            face=[rings[j][k],rings[j][i],rings[j+1][i],rings[j+1][k]]
+            normals=[]
+            for vertex in face:
+                vector=(np.array(vertex)-center)/np.array([width*width,height*height,(width*.82)**2])
+                vector=vector/np.linalg.norm(vector);normals.append(vector.tolist())
+            poly(face,m,[((i+1)/steps,j/levels),(i/steps,j/levels),(i/steps,(j+1)/levels),((i+1)/steps,(j+1)/levels)],normals=normals)
+def tree(cx,cz,height,spread,flowering=False,delicate=False):
+    ground=.009 if flowering or delicate else .033
+    leaves=['Blossom'+str(i) for i in range(6)] if flowering else ['Leaf'+str(i) for i in range(7)]
+    stems=2 if delicate else 3 if flowering else 4
+    for j in range(stems):
+        az=j*math.tau/stems+.4
+        start=np.array([cx+rng.uniform(-.004,.004),ground,cz+rng.uniform(-.004,.004)])
+        head=start+np.array([math.cos(az)*spread*.20,height*rng.uniform(.49,.69),math.sin(az)*spread*.18])
+        beam(start,head,height*.017,height*.008,'Bark',6)
+        for k in range(6 if delicate else 9):
+            t=rng.uniform(.31,.99);root=start+(head-start)*t
+            a=az+rng.uniform(-1.5,1.5)
+            terminal=np.array([cx+math.cos(a)*spread*rng.uniform(.32,.90),ground+height*rng.uniform(.47,.96),cz+math.sin(a)*spread*rng.uniform(.3,.88)])
+            elbow=(terminal+root)*.5+np.array([0,-height*.04,0])
+            beam(root,elbow,height*.009,height*.0042,'Bark',5)
+            beam(elbow,terminal,height*.0042,height*.0015,'Twig',5)
+            for _ in range(4):
+                v=rng.uniform(.45,1);twig=elbow+(terminal-elbow)*v
+                tip=twig+np.array([rng.uniform(-.24,.24)*spread,rng.uniform(.01,.14)*height,rng.uniform(-.22,.22)*spread])
+                beam(twig,tip,height*.0027,height*.0011,'Twig',4)
+                width=spread*rng.uniform(.09,.15) if delicate else spread*rng.uniform(.14,.225)
+                leaf_cluster(tip,width,width*rng.uniform(.72,1.15),'YoungFoliage' if delicate else 'BlossomFoliage' if flowering else 'WillowFoliage')
+                for _ in range(14 if delicate else 26 if not flowering else 18):
+                    pos=tip+np.array([rng.gauss(0,spread*.115),rng.gauss(0,height*.044),rng.gauss(0,spread*.115)])
+                    leaf(*pos,rng.uniform(.0014,.00265) if not flowering else rng.uniform(.0011,.00215),rng.choice(leaves))
+tree(-.231,-.529,.124,.057)
+tree(.333,-.365,.067,.027,True)
+tree(.345,-.393,.096,.023,delicate=True)
+
+# Convert to physical tabletop dimensions and make the reference view face +Z
+# on launch. A six-degree yaw presents the main building's LEFT return wall in Quick Look.
+SCALE=.475;xc=(XL+XR)/2;zc=(ZF+ZB)/2;angle=math.radians(7);c=math.cos(angle);ss=math.sin(angle)
+def placed(p):
+    x,y,z=p;x-=xc;z-=zc
+    return [round(SCALE*(c*x+ss*z),7),round(SCALE*(y+.011),7),round(SCALE*(-ss*x+c*z),7)]
+nodes=[{'name':ROOT},{'name':MOVING,'parent':ROOT,'animation':{'translation':True,'times':[0,2,4,6,8],'values':[[0,0,0],[.00055,0,.0003],[0,0,.00062],[-.00055,0,.0003],[0,0,0]]}}]
+for (group,m,double),geom in batches.items():
+    geom['points']=[placed(p) for p in geom['points']]
+    if geom.get('normals'):
+        geom['normals']=[[round(c*x+ss*z,7),round(y,7),round(-ss*x+c*z,7)] for x,y,z in geom['normals']]
+    nodes.append({'name':group+m+('Foliage' if double else 'Surface'),'parent':group,'mesh':geom})
+# Calibrate the photographed perspective from a camera near the surface.
+# Fit the entire silhouette in the browser by changing focal length on resize.
+points=np.vstack([np.asarray(n['mesh']['points']) for n in nodes if 'mesh' in n])
+eye=np.asarray(placed((.000,.090,.045)));aim=np.asarray(placed((.049,.063,-.395)))
+for _ in range(8):
+    forward=aim-eye;dist=np.linalg.norm(forward);forward/=dist
+    right=np.cross(forward,[0.,1.,0.]);right/=np.linalg.norm(right);up=np.cross(right,forward)
+    rel=points-eye;depth=np.einsum('ij,j->i',rel,forward)
+    u=np.einsum('ij,j->i',rel,right)/depth;v=np.einsum('ij,j->i',rel,up)/depth
+    aim+=(right*(u.max()+u.min())+up*(v.max()+v.min()))*.36*dist
+hero={'eye':eye.tolist(),'target':aim.tolist(),'tanX':float(np.max(np.abs(u))),
+      'tanY':float(np.max(np.abs(v))),'islandEnds':[placed(meadow(0,0)),placed(meadow(1,0))]}
+(OUT/'view.json').write_text(json.dumps(hero,indent=2))
+scene={'materials':mat,'nodes':nodes,'duration':8,'hero':hero}
+(OUT/'scene.json').write_text(json.dumps(scene,separators=(',',':')))
+from export_usd import write_usdz
+write_usdz(scene, OUT)
+subprocess.run([sys.executable,str(HERE/'export_glb.py'),str(OUT/'scene.json'),str(OUT/'pond.glb')],check=True)
+print('Finished',len(nodes),'groups,',sum(len(n['mesh']['indices'])//3 for n in nodes if 'mesh' in n),'triangles')

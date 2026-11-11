@@ -46,7 +46,7 @@ function freeModel(root) {
 
 export function mountPreview({
   container,
-  modelUrl = new URL("./pond.glb", import.meta.url),
+  modelUrl = new URL("./mill-study.glb", import.meta.url),
   onReady,
   onError,
   playing = !matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -61,9 +61,10 @@ export function mountPreview({
   canvas.style.cssText =
     "position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none;outline-offset:-3px;";
   const scene = new Scene(),
-    camera = new PerspectiveCamera(30, 1, 0.001, 10);
+    camera = new PerspectiveCamera(37, 1, 0.001, 10);
   const center = new Vector3(),
-    defaultDirection = new Vector3(0.73, 0.56, 1.27).normalize();
+    defaultDirection = new Vector3(-0.055, 0.035, 1).normalize();
+  let authoredView;
   let renderer,
     controls,
     mixer,
@@ -161,7 +162,15 @@ export function mountPreview({
       verticalFov,
       2 * Math.atan(Math.tan(verticalFov / 2) * aspect),
     );
-    frameDistance = (radius / Math.sin(limitingFov * 0.5)) * 0.7;
+    frameDistance = (radius / Math.sin(limitingFov * 0.5)) * 0.65;
+    if (authoredView) {
+      const tangent = Math.max(
+        authoredView.tanY / 0.88,
+        authoredView.tanX / (aspect * 0.915),
+      );
+      camera.fov = (2 * Math.atan(tangent) * 180) / Math.PI;
+      frameDistance = new Vector3(...authoredView.eye).distanceTo(center);
+    }
     camera.aspect = aspect;
     camera.near = Math.max(0.0003, radius * 0.012);
     camera.far = radius * 75;
@@ -267,6 +276,14 @@ export function mountPreview({
     radius = Math.max(0.01, 0.5 * size.length());
     box.getCenter(center);
     center.y -= size.y * 0.12;
+    authoredView = model.userData.hero;
+    if (authoredView) {
+      center.set(...authoredView.target);
+      defaultDirection
+        .set(...authoredView.eye)
+        .sub(center)
+        .normalize();
+    }
     renderer = new WebGLRenderer({
       canvas,
       alpha: true,
@@ -335,7 +352,7 @@ export function mountPreview({
     controls.rotateSpeed = 0.65;
     controls.zoomSpeed = 0.65;
     controls.minPolarAngle = Math.PI * 0.065;
-    controls.maxPolarAngle = Math.PI * 0.465;
+    controls.maxPolarAngle = Math.PI * 0.52;
     controls.addEventListener("change", schedule);
     canvas.addEventListener("keydown", keydown);
     canvas.addEventListener("webglcontextlost", contextLost);

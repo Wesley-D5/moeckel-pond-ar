@@ -101,25 +101,9 @@ def visit(node, parent_index, incoming, ancestor_q):
         model['nodes'][parent_index].setdefault('children', []).append(index)
         model['nodes'].append({'name':node['name'], 'translation':transform_here[:3,3].tolist(),
                                'rotation': combined_q.tolist()})
-        axis = 'XYZ'.index(animation['axis'])
-        times, angles = [], []
-        for time, angle in zip(animation['times'],animation['angles']):
-            if angles:
-                split = max(1,math.ceil(abs(angle-angles[-1])/85))
-                times.extend(np.linspace(times[-1],time,split+1).tolist()[1:])
-                angles.extend(np.linspace(angles[-1],angle,split+1).tolist()[1:])
-            else:
-                times.append(time); angles.append(angle)
-        values=[]
-        for angle in angles:
-            rot = list(node.get('rotation',[0,0,0])); rot[axis]=angle
-            q = qmultiply(ancestor_q,quaternion(rot))
-            if values and np.dot(values[-1],q)<0:
-                q=-q
-            values.append(q)
-        motion['channels'].append({'sampler':len(motion['samplers']),'target':{'node':index,'path':'rotation'}})
-        motion['samplers'].append({'input':accessor(np.array(times,dtype='<f4'),'SCALAR',bounds=True),
-                                   'output':accessor(np.array(values,dtype='<f4'),'VEC4'),'interpolation':'LINEAR'})
+        motion['channels'].append({'sampler':len(motion['samplers']),'target':{'node':index,'path':'translation'}})
+        motion['samplers'].append({'input':accessor(np.array(animation['times'],dtype='<f4'),'SCALAR',bounds=True),
+                                   'output':accessor(np.array(animation['values'],dtype='<f4'),'VEC3'),'interpolation':'LINEAR'})
         parent_index,transform_here,combined_q=index,identity,[0,0,0,1]
     data=node.get('mesh')
     if data:
@@ -133,7 +117,9 @@ def visit(node, parent_index, incoming, ancestor_q):
         valid=lengths>1e-13
         indices, triangles, normals = indices[valid],triangles[valid],normals[valid]/lengths[valid,None]
         if len(normals):
-            if 'Relief' in node['name'] or 'Ground' in node['name']:
+            if data.get('normals'):
+                normals=np.array(data['normals'])[indices]
+            elif 'Relief' in node['name'] or 'Ground' in node['name']:
                 smooth=np.zeros_like(points)
                 for i in range(3):
                     np.add.at(smooth,indices[:,i],normals)
@@ -169,6 +155,7 @@ for (node_id, mat, has_uv), batch in parts.items():
     index_type='<u2' if len(vertices)<65536 else '<u4'
     index=accessor(idx.astype(index_type).reshape(-1),'SCALAR',34963)
     model['meshes'][node['mesh']]['primitives'].append({'attributes':attrs,'indices':index,'material':mat})
+model['scenes'][0]['extras']={'hero':scene['hero']}
 if motion['channels']:
     model['animations']=[motion]
 if not model['textures']:

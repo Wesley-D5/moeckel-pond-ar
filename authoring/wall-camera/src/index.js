@@ -16,6 +16,7 @@ function el(tag, cls, text) {
 export function startWall({
   filmUrl,
   posterUrl,
+  nativeFallback,
   container = document.body,
   mode = "patch",
   onEnd = () => {},
@@ -57,6 +58,23 @@ export function startWall({
   header.append(title, closeButton);
   controls.append(placeButton, soundButton);
   footer.append(hint, controls);
+  let applePlacement;
+  if (nativeFallback) {
+    // Safari recognizes rel=ar only on an anchor with a single image child.
+    applePlacement = el("div", "wall-native-fallback");
+    const link = el("a");
+    link.rel = "ar";
+    link.href = nativeFallback;
+    link.setAttribute("aria-label", "Use Apple wall placement");
+    const thumbnail = el("img");
+    thumbnail.alt = "";
+    thumbnail.src = video.poster;
+    link.append(thumbnail);
+    applePlacement.append(link, el("span", "", "Use Apple wall placement"));
+    applePlacement.hidden = true;
+    footer.append(applePlacement);
+    link.addEventListener("click", () => setTimeout(close, 0));
+  }
   root.append(stage, aim, header, footer);
   container.append(root);
   root.showModal();
@@ -74,6 +92,9 @@ export function startWall({
     message = text;
     root.dataset.state = next;
     hint.textContent = text;
+    if (applePlacement) {
+      applePlacement.hidden = !["error", "lost", "untextured"].includes(next);
+    }
     const relocate = next === "placed" || next === "lost";
     placeButton.textContent =
       next === "error" && mode === "webxr"
@@ -177,7 +198,7 @@ export function startWall({
     soundButton.setAttribute("aria-pressed", String(!video.muted));
   };
   stage.onclick = (e) => {
-    if (state === "searching" || state === "ready") {
+    if (["searching", "untextured", "ready"].includes(state)) {
       const b = stage.getBoundingClientRect();
       active?.place(
         (e.clientX - b.left) / b.width,

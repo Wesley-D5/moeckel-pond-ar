@@ -1,47 +1,40 @@
-# Moeckel Pond — The Wall Film
+# Moeckel Pond
 
-[Place the film on your wall](https://wesley-d5.github.io/moeckel-pond-ar/) · [Open the original MP4 wall player](https://wesley-d5.github.io/moeckel-pond-ar/#original-film)
+[Place the film on a wall](https://wesley-d5.github.io/moeckel-pond-ar/#wall) · [Explore the miniature](https://wesley-d5.github.io/moeckel-pond-ar/#miniature)
 
-A static, self-hosted artwork. Open the site in Safari on iPhone or iPad and choose **Place the film on a wall**. In Apple Quick Look, select AR and move slowly across a vertical surface. The film runs for 41 seconds with its original soundtrack.
+This static site presents the 41-second Moeckel Pond film and a tabletop mill modeled from the reference photograph. All camera processing stays on the device.
 
-## The two wall players
+## Wall film
 
-- **Apple Quick Look** handles world tracking and vertical placement. The self-contained USDZ encodes all 995 source-frame times at 960 × 540 and 24 fps using animated texture tiles. Nearly identical patches reuse texture data. The package includes the original AAC soundtrack. The page launches it using an ordinary `a[rel=ar]` link with one image child. Serve USDZ files with `model/vnd.usdz+zip` and byte-range support.
-- **Place the full-quality film with your camera** plays the original 960 × 540, 24 fps MP4 directly. On iPhone, the MIT-licensed JSFeat tracker follows the visible texture of a wall on the device. Face the wall straight on when placing. The film pauses during tracking loss and resumes when the same wall detail returns. On compatible devices WebXR uses measured vertical surfaces. The player has controls to enable sound, move the film and release the camera.
+On a phone, choose **Place on wall**. Face a wall straight on, find an area with visible detail and tap where the film should go. The player decodes `assets/poster-540.mp4` as one continuous video surface at the original 960 × 540 and 24 fps. Its sound control enables the original soundtrack.
 
-Camera access starts when someone chooses **Open camera** in the browser player. All tracking and rendering happen on the device. The site needs only static hosting.
+On supported devices, native WebXR hit tests can place the film on a vertical surface. The local camera player can also follow detail in the chosen wall using JSFeat and a planar transform. It hides the film when tracking is lost, recovers when the same features return, and releases the camera when closed.
 
-## Other artwork
+A compatible iPhone can switch to Apple wall placement if the browser cannot track the surface or access the camera. That self-contained USDZ uses a complete image for each selected moment and includes the original AAC audio. It is a smaller-resolution animated edition suitable for Apple's model viewer. The original MP4 is the normal mobile wall player.
 
-The **Living print** USDZ includes its own image anchor for the original spring image at a width of 25.4 cm. Its 18 physical panels turn through four seasons in a 24-second loop. Print the supplied landscape Letter PDF at actual size.
+## Miniature
 
-The **Miniature** is an animated 31.6 cm tabletop model. The model and browser preview share their mesh and animation source. Three.js loads on demand to display the GLB. The film, printable artwork, fallback images and handoff codes are served with the site.
+The projecting gabled building and long wing are modeled as connected volumes above separate masonry piers. The retaining wall runs along the left bank. The island extends from the left midground into the right foreground. Edge trees leave a clear roofline. The plinth has an unillustrated finish.
 
-## Development
+The USDZ opens in Apple Quick Look. The matching GLB powers the interactive browser preview and compatible Android placement. The geometry is an interpretation from one photograph. The unseen faces are inferred.
 
-Serve the directory containing `index.html` using a static server. Use HTTPS for device camera testing. GitHub Pages publishes the repository root. The alternative Sites checkout publishes `dist/`. All files needed to view the artwork are checked in.
+## Hosting and source
 
-The optional `authoring/` directory contains the editable camera player, 3D preview and model generators. Run the following in that directory to rebuild the JavaScript modules.
+Serve the directory containing `index.html` from an HTTPS static host. GitHub Pages publishes the repository root. The companion Sites checkout publishes `dist/`. The new entry script is `pond.js`. Preserve byte-range support for the MP4 and serve USDZ as `model/vnd.usdz+zip`.
+
+The browser wall player, miniature viewer and native asset generators are in `authoring/`. Generated assets are checked in. To rebuild the browser modules, run `npm ci` and `npm run bundle` from `authoring/`. Asset generation runs offline and is optional for hosting.
+
+The application and our asset generators are MIT licensed. The bundled JSFeat, Three.js and fonts retain their original notices. The supplied footage, photographs, soundtrack and derivative image textures retain their original rights.
+
+## Regenerating the assets
+
+The following commands use the GitHub Pages checkout layout. They require Python, Pillow, NumPy, FFmpeg and OpenUSD command-line tools. Use `dist/assets/` for published media in the companion Sites checkout.
 
 ```sh
-npm ci
-npm run bundle
+python3 authoring/wall-film/build.py assets/poster-540.mp4 authoring/wall-film/generated
+python3 authoring/miniature/build.py authoring/miniature/build
 ```
 
-To regenerate the models, install Python 3, Pillow, NumPy, FFmpeg and the OpenUSD CLI tools (`usdcat`, `usdzip`, `usdchecker`). The print PDF additionally uses ReportLab. Run the following from the GitHub Pages repository root.
+The wall generator emits `moeckel-wall-film-whole.usdz`. Its native MaterialX playback requires iOS or iPadOS 18 or later. `#apple-wall` opens the optional native wall route on supported devices. The smaller native edition uses 279 complete 512 × 288 images over the 41.46-second original AAC track.
 
-```sh
-python3 authoring/wall-film/build_wall_film.py assets/poster-540.mp4 authoring/wall-film/generated
-cp authoring/wall-film/generated/moeckel-wall-film.usdz models/wall-film.usdz
-python3 authoring/print/build_print.py --poster assets/poster.jpg --film assets/poster-540.mp4 --output models/living-print.usdz
-python3 authoring/make_print.py assets/poster.jpg assets/living-print.pdf
-python3 authoring/miniature/build.py
-cp authoring/miniature/moeckel-pond-miniature.usdz models/tabletop-mill.usdz
-python3 authoring/preview/export-glb.py authoring/miniature/scene.json preview/pond.glb
-```
-
-Asset authoring tools run offline. Model regeneration and JavaScript bundling are optional for deployment.
-
-## License
-
-The original application code and effect generators are distributed under the MIT license in `LICENSE`. Licensed dependencies retain their notices in `wall/`, `preview/` and `fonts/`. The supplied film, photographs, soundtrack and their extracted frames retain their original rights. Apple Quick Look is Apple's built-in viewer.
+The miniature generator emits `moeckel-pond-miniature.usdz` and `pond.glb`. The site serves them at `models/moeckel-mill.usdz` and `preview/mill-study.glb`. The modeled façade, roof and masonry textures use perspective-corrected crops of the source photograph.

@@ -1,4 +1,3 @@
-*.pdf binary
 *.usdz binary
 *.glb binary
 preview/preview.js -diff linguist-generated=true
